@@ -134,7 +134,7 @@ export const createSubscriptionCheckout = asyncHandler(async (req: AuthRequest, 
   const { plan, isYearly } = req.body;
 
   // Validate plan. VIP / Deal Access Pass is a one-time payment (handled below).
-  const validPlans = ['starter', 'professional', 'premium', 'vip_access'];
+  const validPlans = ['starter', 'premium', 'enterprise', 'vip_access'];
   if (!plan || !validPlans.includes(plan)) {
     throw new BadRequestError('Invalid subscription plan');
   }
@@ -179,7 +179,7 @@ export const createSubscriptionCheckout = asyncHandler(async (req: AuthRequest, 
 
   // Get the price ID for the selected subscription plan
   const priceId = stripeService.getPriceId(
-    plan as 'starter' | 'professional' | 'premium',
+    plan as 'starter' | 'premium' | 'enterprise',
     isYearly ? 'yearly' : 'monthly'
   );
 

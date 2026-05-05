@@ -160,7 +160,7 @@ class CreditService {
   async getSubscriptionPlans() {
     const plans = await pricingConfigService.getSubscriptionPlans();
     return plans.map((plan, index) => {
-      const keys = ['STARTER', 'PROFESSIONAL', 'PREMIUM', 'VIP_ACCESS'];
+      const keys = ['STARTER', 'PREMIUM', 'ENTERPRISE', 'VIP_ACCESS'];
       return {
         id: keys[index],
         name: plan.name,
@@ -178,7 +178,7 @@ class CreditService {
 
   /**
    * Get a specific subscription plan's config by key.
-   * Grandfathered plans (PACKAGE_TOOL, ENTERPRISE) are no longer in the public catalog
+   * Grandfathered plans (PACKAGE_TOOL, PROFESSIONAL) are no longer in the public catalog
    * but existing subscribers still need their credit allocation honored on renewal.
    */
   async getSubscriptionPlanConfig(plan: SubscriptionPlan): Promise<SubscriptionPlanConfig> {
@@ -193,18 +193,18 @@ class CreditService {
         features: ['Carrier intelligence tools', 'No listing credits — tools only'],
       };
     }
-    if (plan === SubscriptionPlan.ENTERPRISE) {
+    if (plan === SubscriptionPlan.PROFESSIONAL) {
       return {
-        name: 'Enterprise',
-        credits: 15,
-        priceMonthly: 79.99,
-        priceYearly: 767.99,
-        stripePriceIdMonthly: process.env.STRIPE_PRICE_ENTERPRISE_MONTHLY || '',
-        stripePriceIdYearly: process.env.STRIPE_PRICE_ENTERPRISE_YEARLY || '',
-        features: ['15 listing unlock credits per month', 'Free credit reports', 'AI-powered due diligence'],
+        name: 'Professional',
+        credits: 10,
+        priceMonthly: 39,
+        priceYearly: 374.40,
+        stripePriceIdMonthly: process.env.STRIPE_PRICE_PROFESSIONAL_MONTHLY || '',
+        stripePriceIdYearly: process.env.STRIPE_PRICE_PROFESSIONAL_YEARLY || '',
+        features: ['10 listing unlock credits per month', 'EVA AI Assistant', 'CarrierPulse included'],
       };
     }
-    const planKey = plan as 'STARTER' | 'PROFESSIONAL' | 'PREMIUM' | 'VIP_ACCESS';
+    const planKey = plan as 'STARTER' | 'PREMIUM' | 'ENTERPRISE' | 'VIP_ACCESS';
     return pricingConfigService.getSubscriptionPlan(planKey);
   }
 

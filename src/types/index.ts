@@ -209,36 +209,40 @@ export interface CreateListingData {
 }
 
 // Subscription Plans
+// Used by buyerService.fulfillSubscription to populate Subscription DB record
+// after Stripe webhook. Values must match the public catalog in pricingConfigService.
+// PROFESSIONAL kept for grandfathered subs (buyerService.ts maps PROFESSIONAL → PREMIUM
+// before the SUBSCRIPTION_PLANS lookup, so this block is defensive).
 export const SUBSCRIPTION_PLANS = {
   STARTER: {
     name: 'Starter',
-    credits: 4,
-    priceMonthly: 99,
-    priceYearly: 950, // ~20% discount
+    credits: 6,
+    priceMonthly: 19.99,
+    priceYearly: 192,
     stripePriceIdMonthly: process.env.STRIPE_PRICE_STARTER_MONTHLY || '',
     stripePriceIdYearly: process.env.STRIPE_PRICE_STARTER_YEARLY || '',
   },
   PROFESSIONAL: {
     name: 'Professional',
-    credits: 4,
-    priceMonthly: 2599,
-    priceYearly: 24949,
+    credits: 10,
+    priceMonthly: 39,
+    priceYearly: 374.40,
     stripePriceIdMonthly: process.env.STRIPE_PRICE_PROFESSIONAL_MONTHLY || '',
     stripePriceIdYearly: process.env.STRIPE_PRICE_PROFESSIONAL_YEARLY || '',
   },
   PREMIUM: {
     name: 'Premium',
     credits: 10,
-    priceMonthly: 199,
-    priceYearly: 1910,
+    priceMonthly: 39.99,
+    priceYearly: 383.99,
     stripePriceIdMonthly: process.env.STRIPE_PRICE_PREMIUM_MONTHLY || '',
     stripePriceIdYearly: process.env.STRIPE_PRICE_PREMIUM_YEARLY || '',
   },
   ENTERPRISE: {
     name: 'Enterprise',
-    credits: 25,
-    priceMonthly: 399,
-    priceYearly: 3830,
+    credits: 20,
+    priceMonthly: 79.99,
+    priceYearly: 767.99,
     stripePriceIdMonthly: process.env.STRIPE_PRICE_ENTERPRISE_MONTHLY || '',
     stripePriceIdYearly: process.env.STRIPE_PRICE_ENTERPRISE_YEARLY || '',
   },

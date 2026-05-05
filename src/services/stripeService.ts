@@ -84,6 +84,10 @@ export const SUBSCRIPTION_PRICE_IDS = {
     monthly: process.env.STRIPE_PRICE_PREMIUM_MONTHLY || 'price_premium_monthly',
     yearly: process.env.STRIPE_PRICE_PREMIUM_YEARLY || 'price_premium_yearly',
   },
+  enterprise: {
+    monthly: process.env.STRIPE_PRICE_ENTERPRISE_MONTHLY || 'price_enterprise_monthly',
+    yearly: process.env.STRIPE_PRICE_ENTERPRISE_YEARLY || 'price_enterprise_yearly',
+  },
   // VIP / Deal Access Pass is a one-time payment (not a subscription).
   // Use STRIPE_PRICE_VIP_ACCESS_ONETIME for the new $399 one-time price.
   vip_access: {
@@ -1898,7 +1902,7 @@ class StripeService {
    * Get price ID for a subscription plan
    */
   getPriceId(
-    plan: 'starter' | 'professional' | 'premium',
+    plan: 'starter' | 'premium' | 'enterprise',
     interval: 'monthly' | 'yearly'
   ): string {
     return SUBSCRIPTION_PRICE_IDS[plan][interval];

@@ -31,8 +31,8 @@ export interface PlatformFeesConfig {
 export interface PricingConfig {
   subscriptionPlans: {
     starter: SubscriptionPlanConfig;
-    professional: SubscriptionPlanConfig;
     premium: SubscriptionPlanConfig;
+    enterprise: SubscriptionPlanConfig;
     vip_access: SubscriptionPlanConfig;
   };
   platformFees: PlatformFeesConfig;
@@ -45,48 +45,48 @@ const DEFAULT_PRICING: PricingConfig = {
     starter: {
       name: 'Starter',
       credits: 6,
-      priceMonthly: 19,
-      priceYearly: 182.40,
+      priceMonthly: 19.99,
+      priceYearly: 192,
       stripePriceIdMonthly: process.env.STRIPE_PRICE_STARTER_MONTHLY || '',
       stripePriceIdYearly: process.env.STRIPE_PRICE_STARTER_YEARLY || '',
       features: [
         '6 listing unlock credits per month',
         'Full marketplace access',
         'CarrierPulse included',
-        'Risk Checks',
-        'Standard support',
-      ],
-    },
-    professional: {
-      name: 'Professional',
-      credits: 10,
-      priceMonthly: 39,
-      priceYearly: 374.40,
-      stripePriceIdMonthly: process.env.STRIPE_PRICE_PROFESSIONAL_MONTHLY || '',
-      stripePriceIdYearly: process.env.STRIPE_PRICE_PROFESSIONAL_YEARLY || '',
-      features: [
-        '10 listing unlock credits per month',
-        'Full marketplace access',
-        'EVA AI Assistant',
-        'CarrierPulse included',
-        'Risk Checks',
-        'Unlock Company Credit Check — 4 reports/mo',
-        'UCC filings, tax liens, bankruptcy & payment history',
         'Standard support',
       ],
     },
     premium: {
       name: 'Premium',
-      credits: 15,
-      priceMonthly: 79,
-      priceYearly: 758.40,
+      credits: 10,
+      priceMonthly: 39.99,
+      priceYearly: 383.99,
       stripePriceIdMonthly: process.env.STRIPE_PRICE_PREMIUM_MONTHLY || '',
       stripePriceIdYearly: process.env.STRIPE_PRICE_PREMIUM_YEARLY || '',
       features: [
-        'Everything in Professional',
-        '15 credits per month',
-        'AI Due Diligence Reports',
-        '15 Company Credit Reports included',
+        '10 listing unlock credits per month',
+        'EVA AI Assistant',
+        'CarrierPulse included',
+        'Risk Checks',
+        '5 Company Credit Reports per month',
+        'UCC filings, tax liens, payment history & credit line',
+        'Standard support',
+      ],
+    },
+    enterprise: {
+      name: 'Enterprise',
+      credits: 20,
+      priceMonthly: 79.99,
+      priceYearly: 767.99,
+      stripePriceIdMonthly: process.env.STRIPE_PRICE_ENTERPRISE_MONTHLY || '',
+      stripePriceIdYearly: process.env.STRIPE_PRICE_ENTERPRISE_YEARLY || '',
+      features: [
+        '20 listing unlock credits per month',
+        '20 Company Credit Reports per month',
+        'Everything in Premium',
+        'EVA AI Assistant',
+        'CarrierPulse included',
+        'Risk Checks',
         'Priority support',
       ],
     },
@@ -183,8 +183,8 @@ class PricingConfigService {
     const config = await this.getPricingConfig();
     return [
       config.subscriptionPlans.starter,
-      config.subscriptionPlans.professional,
       config.subscriptionPlans.premium,
+      config.subscriptionPlans.enterprise,
       config.subscriptionPlans.vip_access,
     ];
   }
@@ -192,9 +192,9 @@ class PricingConfigService {
   /**
    * Get a specific subscription plan by key
    */
-  async getSubscriptionPlan(planKey: 'STARTER' | 'PROFESSIONAL' | 'PREMIUM' | 'VIP_ACCESS'): Promise<SubscriptionPlanConfig> {
+  async getSubscriptionPlan(planKey: 'STARTER' | 'PREMIUM' | 'ENTERPRISE' | 'VIP_ACCESS'): Promise<SubscriptionPlanConfig> {
     const config = await this.getPricingConfig();
-    const key = planKey.toLowerCase() as 'starter' | 'professional' | 'premium' | 'vip_access';
+    const key = planKey.toLowerCase() as 'starter' | 'premium' | 'enterprise' | 'vip_access';
     return config.subscriptionPlans[key];
   }
 
@@ -233,7 +233,7 @@ class PricingConfigService {
   /**
    * Get Stripe price ID for a subscription plan
    */
-  async getStripePriceId(planKey: 'STARTER' | 'PROFESSIONAL' | 'PREMIUM' | 'VIP_ACCESS', isYearly: boolean): Promise<string> {
+  async getStripePriceId(planKey: 'STARTER' | 'PREMIUM' | 'ENTERPRISE' | 'VIP_ACCESS', isYearly: boolean): Promise<string> {
     const plan = await this.getSubscriptionPlan(planKey);
     return isYearly ? plan.stripePriceIdYearly : plan.stripePriceIdMonthly;
   }
@@ -269,15 +269,6 @@ class PricingConfigService {
           stripePriceIdYearly: settingsMap['starter_stripe_yearly'] || DEFAULT_PRICING.subscriptionPlans.starter.stripePriceIdYearly,
           features: this.parseJson(settingsMap['starter_features'], DEFAULT_PRICING.subscriptionPlans.starter.features),
         },
-        professional: {
-          name: 'Professional',
-          credits: this.parseNumber(settingsMap['professional_credits'], DEFAULT_PRICING.subscriptionPlans.professional.credits),
-          priceMonthly: this.parseNumber(settingsMap['professional_price_monthly'], DEFAULT_PRICING.subscriptionPlans.professional.priceMonthly),
-          priceYearly: this.parseNumber(settingsMap['professional_price_yearly'], DEFAULT_PRICING.subscriptionPlans.professional.priceYearly),
-          stripePriceIdMonthly: settingsMap['professional_stripe_monthly'] || DEFAULT_PRICING.subscriptionPlans.professional.stripePriceIdMonthly,
-          stripePriceIdYearly: settingsMap['professional_stripe_yearly'] || DEFAULT_PRICING.subscriptionPlans.professional.stripePriceIdYearly,
-          features: this.parseJson(settingsMap['professional_features'], DEFAULT_PRICING.subscriptionPlans.professional.features),
-        },
         premium: {
           name: 'Premium',
           credits: this.parseNumber(settingsMap['premium_credits'], DEFAULT_PRICING.subscriptionPlans.premium.credits),
@@ -286,6 +277,15 @@ class PricingConfigService {
           stripePriceIdMonthly: settingsMap['premium_stripe_monthly'] || DEFAULT_PRICING.subscriptionPlans.premium.stripePriceIdMonthly,
           stripePriceIdYearly: settingsMap['premium_stripe_yearly'] || DEFAULT_PRICING.subscriptionPlans.premium.stripePriceIdYearly,
           features: this.parseJson(settingsMap['premium_features'], DEFAULT_PRICING.subscriptionPlans.premium.features),
+        },
+        enterprise: {
+          name: 'Enterprise',
+          credits: this.parseNumber(settingsMap['enterprise_credits'], DEFAULT_PRICING.subscriptionPlans.enterprise.credits),
+          priceMonthly: this.parseNumber(settingsMap['enterprise_price_monthly'], DEFAULT_PRICING.subscriptionPlans.enterprise.priceMonthly),
+          priceYearly: this.parseNumber(settingsMap['enterprise_price_yearly'], DEFAULT_PRICING.subscriptionPlans.enterprise.priceYearly),
+          stripePriceIdMonthly: settingsMap['enterprise_stripe_monthly'] || DEFAULT_PRICING.subscriptionPlans.enterprise.stripePriceIdMonthly,
+          stripePriceIdYearly: settingsMap['enterprise_stripe_yearly'] || DEFAULT_PRICING.subscriptionPlans.enterprise.stripePriceIdYearly,
+          features: this.parseJson(settingsMap['enterprise_features'], DEFAULT_PRICING.subscriptionPlans.enterprise.features),
         },
         vip_access: {
           name: 'VIP / Deal Access Pass',
@@ -323,14 +323,6 @@ class PricingConfigService {
       { key: 'starter_stripe_yearly', value: config.subscriptionPlans.starter.stripePriceIdYearly, type: 'string' },
       { key: 'starter_features', value: JSON.stringify(config.subscriptionPlans.starter.features), type: 'json' },
 
-      // Professional plan
-      { key: 'professional_credits', value: String(config.subscriptionPlans.professional.credits), type: 'number' },
-      { key: 'professional_price_monthly', value: String(config.subscriptionPlans.professional.priceMonthly), type: 'number' },
-      { key: 'professional_price_yearly', value: String(config.subscriptionPlans.professional.priceYearly), type: 'number' },
-      { key: 'professional_stripe_monthly', value: config.subscriptionPlans.professional.stripePriceIdMonthly, type: 'string' },
-      { key: 'professional_stripe_yearly', value: config.subscriptionPlans.professional.stripePriceIdYearly, type: 'string' },
-      { key: 'professional_features', value: JSON.stringify(config.subscriptionPlans.professional.features), type: 'json' },
-
       // Premium plan
       { key: 'premium_credits', value: String(config.subscriptionPlans.premium.credits), type: 'number' },
       { key: 'premium_price_monthly', value: String(config.subscriptionPlans.premium.priceMonthly), type: 'number' },
@@ -338,6 +330,14 @@ class PricingConfigService {
       { key: 'premium_stripe_monthly', value: config.subscriptionPlans.premium.stripePriceIdMonthly, type: 'string' },
       { key: 'premium_stripe_yearly', value: config.subscriptionPlans.premium.stripePriceIdYearly, type: 'string' },
       { key: 'premium_features', value: JSON.stringify(config.subscriptionPlans.premium.features), type: 'json' },
+
+      // Enterprise plan
+      { key: 'enterprise_credits', value: String(config.subscriptionPlans.enterprise.credits), type: 'number' },
+      { key: 'enterprise_price_monthly', value: String(config.subscriptionPlans.enterprise.priceMonthly), type: 'number' },
+      { key: 'enterprise_price_yearly', value: String(config.subscriptionPlans.enterprise.priceYearly), type: 'number' },
+      { key: 'enterprise_stripe_monthly', value: config.subscriptionPlans.enterprise.stripePriceIdMonthly, type: 'string' },
+      { key: 'enterprise_stripe_yearly', value: config.subscriptionPlans.enterprise.stripePriceIdYearly, type: 'string' },
+      { key: 'enterprise_features', value: JSON.stringify(config.subscriptionPlans.enterprise.features), type: 'json' },
 
       // VIP Access plan
       { key: 'vip_access_credits', value: String(config.subscriptionPlans.vip_access.credits), type: 'number' },
