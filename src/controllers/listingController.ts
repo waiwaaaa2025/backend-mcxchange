@@ -118,11 +118,18 @@ export const getListing = asyncHandler(async (req: AuthRequest, res: Response) =
   const isOwner = req.user && listing.sellerId === req.user.id;
   const isAdmin = req.user?.role === UserRole.ADMIN;
 
-  // VIP listings are only accessible to Enterprise subscribers, admins, and the listing owner
+  // VIP listings are only accessible to Premium subscribers (and grandfathered Enterprise),
+  // VIP / Deal Access Pass holders, admins, and the listing owner.
   if (listing.isVip && !isOwner && !isAdmin) {
     const subscription = await Subscription.findOne({ where: { userId: req.user!.id } });
-    if (!subscription || subscription.status !== SubscriptionStatus.ACTIVE || (subscription.plan !== SubscriptionPlan.ENTERPRISE && subscription.plan !== SubscriptionPlan.VIP_ACCESS)) {
-      res.status(403).json({ success: false, error: 'Enterprise subscription required to view VIP listings.', code: 'ENTERPRISE_REQUIRED' });
+    if (
+      !subscription ||
+      subscription.status !== SubscriptionStatus.ACTIVE ||
+      (subscription.plan !== SubscriptionPlan.PREMIUM &&
+        subscription.plan !== SubscriptionPlan.ENTERPRISE &&
+        subscription.plan !== SubscriptionPlan.VIP_ACCESS)
+    ) {
+      res.status(403).json({ success: false, error: 'Premium subscription required to view VIP listings.', code: 'PREMIUM_REQUIRED' });
       return;
     }
   }

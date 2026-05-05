@@ -529,7 +529,7 @@ class BuyerService {
 
     // Block Starter plan users from requesting premium listings
     if (activeSubscription?.plan === SubscriptionPlan.STARTER) {
-      throw new BadRequestError('Starter plan members cannot request premium MC listings. Please upgrade to Premium or Enterprise to access premium listings.');
+      throw new BadRequestError('Starter plan members cannot request premium MC listings. Please upgrade to Professional or Premium to access premium listings.');
     }
 
     // VIP users bypass credit checks; others need at least 1 credit

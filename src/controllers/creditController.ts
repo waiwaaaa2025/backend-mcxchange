@@ -11,7 +11,7 @@ import { stripeService } from '../services/stripeService';
 // Validation rules
 export const subscribeValidation = [
   body('plan')
-    .isIn(['STARTER', 'PROFESSIONAL', 'PREMIUM', 'ENTERPRISE', 'VIP_ACCESS'])
+    .isIn(['STARTER', 'PROFESSIONAL', 'PREMIUM', 'VIP_ACCESS'])
     .withMessage('Invalid subscription plan'),
   body('isYearly').isBoolean().withMessage('isYearly must be a boolean'),
 ];

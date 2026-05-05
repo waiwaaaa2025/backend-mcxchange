@@ -133,8 +133,8 @@ export const createSubscriptionCheckout = asyncHandler(async (req: AuthRequest, 
 
   const { plan, isYearly } = req.body;
 
-  // Validate plan
-  const validPlans = ['package_tool', 'starter', 'professional', 'premium', 'enterprise', 'vip_access'];
+  // Validate plan. VIP / Deal Access Pass is a one-time payment (handled below).
+  const validPlans = ['starter', 'professional', 'premium', 'vip_access'];
   if (!plan || !validPlans.includes(plan)) {
     throw new BadRequestError('Invalid subscription plan');
   }
@@ -152,14 +152,38 @@ export const createSubscriptionCheckout = asyncHandler(async (req: AuthRequest, 
     await User.update({ stripeCustomerId: customer.id }, { where: { id: req.user.id } });
   }
 
-  // Get the price ID for the selected plan
+  const frontendUrl = config.frontendUrl || 'http://localhost:5173';
+
+  // VIP / Deal Access Pass — one-time payment, not a subscription
+  if (plan === 'vip_access') {
+    const vipResult = await stripeService.createVipPassCheckout({
+      customerId: customer.id,
+      userId: req.user.id,
+      successUrl: `${frontendUrl}/buyer/subscription?success=true&vip=true`,
+      cancelUrl: `${frontendUrl}/buyer/subscription?canceled=true`,
+    });
+
+    if (!vipResult.success) {
+      throw new BadRequestError(vipResult.error || 'Failed to create VIP checkout session');
+    }
+
+    res.json({
+      success: true,
+      data: {
+        sessionId: vipResult.sessionId,
+        url: vipResult.url,
+      },
+    });
+    return;
+  }
+
+  // Get the price ID for the selected subscription plan
   const priceId = stripeService.getPriceId(
-    plan as 'package_tool' | 'starter' | 'professional' | 'premium' | 'enterprise' | 'vip_access',
+    plan as 'starter' | 'professional' | 'premium',
     isYearly ? 'yearly' : 'monthly'
   );
 
   // Create checkout session
-  const frontendUrl = config.frontendUrl || 'http://localhost:5173';
   const result = await stripeService.createCheckoutSession({
     customerId: customer.id,
     priceId,
@@ -469,7 +493,7 @@ export const createPremiumRequest = asyncHandler(async (req: AuthRequest, res: R
     success: true,
     data: request,
     message: isAutoApproved
-      ? 'Premium listing unlocked instantly with your Enterprise subscription.'
+      ? 'Premium listing unlocked instantly with your subscription.'
       : 'Premium request submitted successfully. Admin will review your request.',
   });
 });
@@ -784,9 +808,9 @@ export const checkOrUnlockCreditReport = asyncHandler(async (req: AuthRequest, r
   const isActive = subscription?.status === SubscriptionStatus.ACTIVE;
   const isAdmin = req.user.role === UserRole.ADMIN;
 
-  // Enterprise and VIP get it free, admin always free
+  // Premium (and grandfathered Enterprise) and VIP / Deal Access Pass get credit reports free; admin always free
   const isFree = isAdmin ||
-    (isActive && (plan === SubscriptionPlan.ENTERPRISE || plan === SubscriptionPlan.VIP_ACCESS));
+    (isActive && (plan === SubscriptionPlan.PREMIUM || plan === SubscriptionPlan.ENTERPRISE || plan === SubscriptionPlan.VIP_ACCESS));
 
   if (isFree) {
     res.json({ success: true, data: { unlocked: true, free: true } });
@@ -955,7 +979,7 @@ export const checkCreditReportPurchase = asyncHandler(async (req: AuthRequest, r
     where: { userId: req.user.id, reference, type: CreditTransactionType.USAGE },
   });
 
-  res.json({ success: true, data: { purchased: !!existing, free: false, price: 55 } });
+  res.json({ success: true, data: { purchased: !!existing, free: false, price: 35 } });
 });
 
 // ============================================

@@ -160,7 +160,7 @@ class CreditService {
   async getSubscriptionPlans() {
     const plans = await pricingConfigService.getSubscriptionPlans();
     return plans.map((plan, index) => {
-      const keys = ['PACKAGE_TOOL', 'STARTER', 'PROFESSIONAL', 'PREMIUM', 'ENTERPRISE', 'VIP_ACCESS'];
+      const keys = ['STARTER', 'PROFESSIONAL', 'PREMIUM', 'VIP_ACCESS'];
       return {
         id: keys[index],
         name: plan.name,
@@ -177,11 +177,35 @@ class CreditService {
   }
 
   /**
-   * Get a specific subscription plan's config by key
+   * Get a specific subscription plan's config by key.
+   * Grandfathered plans (PACKAGE_TOOL, ENTERPRISE) are no longer in the public catalog
+   * but existing subscribers still need their credit allocation honored on renewal.
    */
   async getSubscriptionPlanConfig(plan: SubscriptionPlan): Promise<SubscriptionPlanConfig> {
-    const planConfig = await pricingConfigService.getSubscriptionPlan(plan);
-    return planConfig;
+    if (plan === SubscriptionPlan.PACKAGE_TOOL) {
+      return {
+        name: 'Pulse Bundle',
+        credits: 0,
+        priceMonthly: 14.99,
+        priceYearly: 143.90,
+        stripePriceIdMonthly: process.env.STRIPE_PRICE_PACKAGE_TOOL_MONTHLY || '',
+        stripePriceIdYearly: process.env.STRIPE_PRICE_PACKAGE_TOOL_YEARLY || '',
+        features: ['Carrier intelligence tools', 'No listing credits — tools only'],
+      };
+    }
+    if (plan === SubscriptionPlan.ENTERPRISE) {
+      return {
+        name: 'Enterprise',
+        credits: 15,
+        priceMonthly: 79.99,
+        priceYearly: 767.99,
+        stripePriceIdMonthly: process.env.STRIPE_PRICE_ENTERPRISE_MONTHLY || '',
+        stripePriceIdYearly: process.env.STRIPE_PRICE_ENTERPRISE_YEARLY || '',
+        features: ['15 listing unlock credits per month', 'Free credit reports', 'AI-powered due diligence'],
+      };
+    }
+    const planKey = plan as 'STARTER' | 'PROFESSIONAL' | 'PREMIUM' | 'VIP_ACCESS';
+    return pricingConfigService.getSubscriptionPlan(planKey);
   }
 
   /**

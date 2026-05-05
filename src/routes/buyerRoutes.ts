@@ -75,7 +75,7 @@ router.get('/carrier-pulse/creditsafe/search', getCarrierPulseCreditsafeSearch);
 router.get('/carrier-pulse/creditsafe/report/:connectId', getCarrierPulseCreditsafeReport);
 router.get('/carrier-pulse/credit-report/:dotNumber', requireSubscription, checkOrUnlockCreditReport);
 
-// Credit report — open to all buyers (search free, report $55 or included in premium)
+// Credit report — open to all buyers (search free, report $35 or included in Premium)
 router.get('/creditsafe/open-search', creditsafeOpenSearch);
 router.get('/creditsafe/purchased-report/:connectId', creditsafePurchasedReport);
 router.post('/creditsafe/checkout', createCreditReportCheckout);

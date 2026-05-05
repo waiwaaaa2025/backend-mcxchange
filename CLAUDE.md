@@ -14,12 +14,16 @@
 - If there's a mismatch, resolve it before making further changes
 
 ### Subscription plan defaults:
-| Plan | Price/mo | Credits/mo |
-|------|----------|------------|
-| STARTER | $9.99 | 4 |
-| PREMIUM | $29.99 | 15 |
-| ENTERPRISE | $49.99 | 50 |
-| VIP_ACCESS | $19.99 | 999 |
+| Plan | Price | Credits/mo | Notes |
+|------|------|------------|-------|
+| STARTER | $19/mo | 6 | Full marketplace, CarrierPulse, Risk Checks, Standard support |
+| PROFESSIONAL | $39/mo | 10 | + EVA AI, 4 company credit reports/mo (UCC, tax liens, bankruptcy, payment history) |
+| PREMIUM | $79/mo | 15 | Everything in Professional + AI Due Diligence + 15 credit reports + Priority support |
+| VIP_ACCESS | $399 one-time | unlimited (until purchase) | NOT a subscription. $399 credited toward purchase. Display name: "VIP / Deal Access Pass" |
+
+**Grandfathered (no longer offered to new signups, but enum values + existing subscriptions retained):**
+- `PACKAGE_TOOL` — Pulse Bundle, $14.99/mo, 0 credits — tools only.
+- `ENTERPRISE` — $79.99/mo, 15 credits — superseded by the new PREMIUM tier.
 
 ### Key fields:
 - `User.stripeCustomerId` — the Stripe customer ID on the user record

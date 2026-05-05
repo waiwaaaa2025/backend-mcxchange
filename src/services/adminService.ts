@@ -1704,6 +1704,233 @@ class AdminService {
     return offer;
   }
 
+  // Accept offer on behalf of seller (admin override when seller hasn't logged in)
+  // Mirrors offerService.acceptOffer but bypasses sellerId ownership check and logs AdminAction.
+  async acceptOfferOnBehalfOfSeller(offerId: string, adminId: string, notes?: string) {
+    const offer = await Offer.findByPk(offerId, {
+      include: [
+        { model: Listing, as: 'listing' },
+        { model: User, as: 'buyer', attributes: ['id', 'name', 'email'] },
+        { model: User, as: 'seller', attributes: ['id', 'name', 'email'] },
+      ],
+    });
+
+    if (!offer) {
+      throw new NotFoundError('Offer');
+    }
+
+    if (
+      offer.status !== OfferStatus.FORWARDED &&
+      offer.status !== OfferStatus.PENDING &&
+      offer.status !== OfferStatus.COUNTERED
+    ) {
+      throw new ForbiddenError('Only offers awaiting seller response can be accepted on their behalf');
+    }
+
+    const listing = (offer as any).listing;
+    const buyer = (offer as any).buyer;
+    const seller = (offer as any).seller;
+
+    // Calculate amounts — buyer pays counter or original; seller gets sellerAmount if set
+    const buyerPrice = Number(offer.counterAmount || offer.amount);
+    const sellerPrice = Number(offer.sellerAmount || buyerPrice);
+    const depositAmount = calculateDeposit(buyerPrice);
+    const platformFee = calculatePlatformFee(buyerPrice);
+
+    const t = await sequelize.transaction();
+
+    try {
+      await offer.update(
+        {
+          status: OfferStatus.ACCEPTED,
+          adminReviewedBy: adminId,
+          adminReviewedAt: new Date(),
+          adminNotes: notes,
+          respondedAt: new Date(),
+        },
+        { transaction: t }
+      );
+
+      const transaction = await Transaction.create(
+        {
+          offerId,
+          listingId: offer.listingId,
+          buyerId: offer.buyerId,
+          sellerId: offer.sellerId,
+          agreedPrice: buyerPrice,
+          sellerPayout: sellerPrice,
+          depositAmount,
+          platformFee,
+          status: TransactionStatus.AWAITING_DEPOSIT,
+        },
+        { transaction: t }
+      );
+
+      await Listing.update(
+        { status: ListingStatus.RESERVED },
+        { where: { id: offer.listingId }, transaction: t }
+      );
+
+      // Auto-reject sibling offers
+      await Offer.update(
+        { status: OfferStatus.REJECTED, respondedAt: new Date() },
+        {
+          where: {
+            listingId: offer.listingId,
+            id: { [Op.ne]: offerId },
+            status: { [Op.in]: [OfferStatus.PENDING_ADMIN, OfferStatus.FORWARDED, OfferStatus.PENDING, OfferStatus.COUNTERED] },
+          },
+          transaction: t,
+        }
+      );
+
+      await t.commit();
+
+      await AdminAction.create({
+        adminId,
+        action: 'ACCEPT_OFFER_ON_BEHALF',
+        targetType: 'OFFER',
+        targetId: offerId,
+        reason: notes,
+        metadata: JSON.stringify({ transactionId: transaction.id, buyerPrice, sellerPrice }),
+      });
+
+      await TransactionTimeline.create({
+        transactionId: transaction.id,
+        status: TransactionStatus.AWAITING_DEPOSIT,
+        title: 'Offer Accepted by Admin',
+        description: 'Admin accepted the offer on behalf of the seller. Awaiting deposit from buyer.',
+        actorId: adminId,
+        actorRole: 'ADMIN',
+      });
+
+      // Notify buyer (same as seller-driven accept)
+      await Notification.create({
+        userId: offer.buyerId,
+        type: NotificationType.OFFER,
+        title: 'Offer Accepted!',
+        message: `Your offer on MC-${listing?.mcNumber || 'N/A'} has been accepted. Please proceed with the deposit.`,
+        link: `/transaction/${transaction.id}`,
+        metadata: JSON.stringify({ transactionId: transaction.id }),
+      });
+
+      // Notify seller — admin acted on their behalf
+      await Notification.create({
+        userId: offer.sellerId,
+        type: NotificationType.OFFER,
+        title: 'Offer Accepted on Your Behalf',
+        message: `An admin accepted the $${sellerPrice.toLocaleString()} offer on MC-${listing?.mcNumber || 'N/A'} on your behalf. The buyer is now paying the deposit.`,
+        link: `/seller/transactions`,
+        metadata: JSON.stringify({ transactionId: transaction.id, offerId }),
+      });
+
+      // Send "offer accepted" emails to both parties (best effort)
+      try {
+        const mcNumber = listing?.mcNumber || 'N/A';
+        const listingTitle = listing?.title || '';
+        const buyerName = buyer?.name || 'Buyer';
+        const sellerName = seller?.name || 'Seller';
+
+        if (buyer?.email) {
+          await emailService.sendOfferAccepted(buyer.email, {
+            buyerName,
+            sellerName,
+            mcNumber,
+            listingTitle,
+            offerAmount: buyerPrice,
+            status: 'accepted',
+            actionUrl: `${config.frontendUrl}/transaction/${transaction.id}`,
+          });
+        }
+        if (seller?.email) {
+          await emailService.sendOfferAccepted(seller.email, {
+            buyerName,
+            sellerName,
+            mcNumber,
+            listingTitle,
+            offerAmount: sellerPrice,
+            status: 'accepted',
+            actionUrl: `${config.frontendUrl}/transaction/${transaction.id}`,
+          });
+        }
+      } catch (err) {
+        logger.error('Failed to send offer accepted emails (admin on-behalf)', { offerId, err });
+      }
+
+      // Notify admins of new transaction
+      adminNotificationService.notifyTransaction({
+        transactionId: transaction.id,
+        mcNumber: listing?.mcNumber || 'Unknown',
+        buyerName: buyer?.name || 'Unknown',
+        sellerName: seller?.name || 'Unknown',
+        amount: buyerPrice,
+        status: 'created',
+      }).catch(err => {
+        logger.error('Failed to send admin notification for transaction (on-behalf)', err);
+      });
+
+      return { offer, transaction };
+    } catch (error) {
+      await t.rollback();
+      throw error;
+    }
+  }
+
+  // Reject offer on behalf of seller (admin override)
+  async rejectOfferOnBehalfOfSeller(offerId: string, adminId: string, reason?: string) {
+    const offer = await Offer.findByPk(offerId, {
+      include: [{ model: Listing, as: 'listing', attributes: ['id', 'mcNumber', 'title'] }],
+    });
+
+    if (!offer) {
+      throw new NotFoundError('Offer');
+    }
+
+    if (
+      offer.status !== OfferStatus.FORWARDED &&
+      offer.status !== OfferStatus.PENDING &&
+      offer.status !== OfferStatus.COUNTERED
+    ) {
+      throw new ForbiddenError('Only offers awaiting seller response can be rejected on their behalf');
+    }
+
+    await offer.update({
+      status: OfferStatus.REJECTED,
+      adminReviewedBy: adminId,
+      adminReviewedAt: new Date(),
+      adminNotes: reason,
+      respondedAt: new Date(),
+    });
+
+    await AdminAction.create({
+      adminId,
+      action: 'REJECT_OFFER_ON_BEHALF',
+      targetType: 'OFFER',
+      targetId: offerId,
+      reason,
+    });
+
+    // Notify buyer (same wording as seller-driven decline; reason hidden from buyer)
+    await Notification.create({
+      userId: offer.buyerId,
+      type: NotificationType.OFFER,
+      title: 'Offer Declined',
+      message: `Your offer on MC-${(offer as any).listing?.mcNumber || 'N/A'} has been declined.`,
+      link: `/buyer/offers`,
+    });
+
+    // Notify seller — admin acted on their behalf
+    await Notification.create({
+      userId: offer.sellerId,
+      type: NotificationType.OFFER,
+      title: 'Offer Rejected on Your Behalf',
+      message: `An admin rejected the offer on MC-${(offer as any).listing?.mcNumber || 'N/A'} on your behalf.${reason ? ` Reason: ${reason}` : ''}`,
+      link: `/seller/offers`,
+    });
+
+    return offer;
+  }
+
   // Delete offer (admin)
   async deleteOffer(offerId: string, adminId: string) {
     const offer = await Offer.findByPk(offerId);
@@ -2668,8 +2895,13 @@ class AdminService {
    */
   async getSubscriptionAnalytics() {
     // Build a reverse map: priceId -> { plan, interval }
+    // VIP / Deal Access Pass uses one-time pricing — counted as 'monthly' in this aggregation.
     const priceIdToPlan = new Map<string, { plan: string; interval: 'monthly' | 'yearly' }>();
     for (const [plan, prices] of Object.entries(SUBSCRIPTION_PRICE_IDS)) {
+      if ('onetime' in prices) {
+        if (prices.onetime) priceIdToPlan.set(prices.onetime, { plan, interval: 'monthly' });
+        continue;
+      }
       if (prices.monthly) priceIdToPlan.set(prices.monthly, { plan, interval: 'monthly' });
       if (prices.yearly) priceIdToPlan.set(prices.yearly, { plan, interval: 'yearly' });
     }

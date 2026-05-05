@@ -333,12 +333,16 @@ export const requireEnterpriseSubscription = async (
       return;
     }
 
-    // Only Enterprise or VIP Access has access
-    if (subscription.plan !== SubscriptionPlan.ENTERPRISE && subscription.plan !== SubscriptionPlan.VIP_ACCESS) {
+    // Only Premium, Enterprise (grandfathered), or VIP / Deal Access Pass has access
+    if (
+      subscription.plan !== SubscriptionPlan.PREMIUM &&
+      subscription.plan !== SubscriptionPlan.ENTERPRISE &&
+      subscription.plan !== SubscriptionPlan.VIP_ACCESS
+    ) {
       res.status(403).json({
         success: false,
-        error: 'Enterprise subscription required.',
-        code: 'ENTERPRISE_REQUIRED',
+        error: 'Premium subscription required.',
+        code: 'PREMIUM_REQUIRED',
       });
       return;
     }

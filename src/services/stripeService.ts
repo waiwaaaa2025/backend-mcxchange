@@ -72,10 +72,6 @@ export interface CheckoutSessionResult {
 
 // Stripe price IDs for subscription plans (configure in Stripe dashboard)
 export const SUBSCRIPTION_PRICE_IDS = {
-  package_tool: {
-    monthly: process.env.STRIPE_PRICE_PACKAGE_TOOL_MONTHLY || 'price_1TFIVRFnDj2YhGIWVhMNe62E',
-    yearly: process.env.STRIPE_PRICE_PACKAGE_TOOL_YEARLY || 'price_1TFIWTFnDj2YhGIWwiibmRJ1',
-  },
   starter: {
     monthly: process.env.STRIPE_PRICE_STARTER_MONTHLY || 'price_starter_monthly',
     yearly: process.env.STRIPE_PRICE_STARTER_YEARLY || 'price_starter_yearly',
@@ -88,13 +84,10 @@ export const SUBSCRIPTION_PRICE_IDS = {
     monthly: process.env.STRIPE_PRICE_PREMIUM_MONTHLY || 'price_premium_monthly',
     yearly: process.env.STRIPE_PRICE_PREMIUM_YEARLY || 'price_premium_yearly',
   },
-  enterprise: {
-    monthly: process.env.STRIPE_PRICE_ENTERPRISE_MONTHLY || 'price_enterprise_monthly',
-    yearly: process.env.STRIPE_PRICE_ENTERPRISE_YEARLY || 'price_enterprise_yearly',
-  },
+  // VIP / Deal Access Pass is a one-time payment (not a subscription).
+  // Use STRIPE_PRICE_VIP_ACCESS_ONETIME for the new $399 one-time price.
   vip_access: {
-    monthly: process.env.STRIPE_PRICE_VIP_ACCESS_MONTHLY || 'price_vip_access_monthly',
-    yearly: process.env.STRIPE_PRICE_VIP_ACCESS_YEARLY || 'price_vip_access_yearly',
+    onetime: process.env.STRIPE_PRICE_VIP_ACCESS_ONETIME || 'price_vip_access_onetime',
   },
 };
 
@@ -652,7 +645,7 @@ class StripeService {
           {
             price_data: {
               currency: 'usd',
-              unit_amount: 5500, // $55.00
+              unit_amount: 3500, // $35.00
               product_data: {
                 name: 'CreditSafe Business Credit Report',
                 description: `Full credit report for ${params.companyName}`,
@@ -686,6 +679,63 @@ class StripeService {
       logError('Failed to create credit report checkout session', error as Error, {
         customerId: params.customerId,
         connectId: params.connectId,
+      });
+      return {
+        success: false,
+        error: (error as Error).message,
+      };
+    }
+  }
+
+  /**
+   * Create a Stripe Checkout Session for the VIP / Deal Access Pass ($399 one-time).
+   * NOT a subscription — uses mode: 'payment'.
+   */
+  async createVipPassCheckout(params: {
+    customerId: string;
+    userId: string;
+    successUrl: string;
+    cancelUrl: string;
+  }): Promise<CheckoutSessionResult> {
+    if (!stripe) {
+      return { success: false, error: 'Payment service not available' };
+    }
+
+    try {
+      const priceId = SUBSCRIPTION_PRICE_IDS.vip_access.onetime;
+      const session = await stripe.checkout.sessions.create({
+        customer: params.customerId,
+        mode: 'payment',
+        payment_method_types: ['card'],
+        line_items: [
+          {
+            price: priceId,
+            quantity: 1,
+          },
+        ],
+        success_url: params.successUrl,
+        cancel_url: params.cancelUrl,
+        metadata: {
+          type: 'vip_pass_purchase',
+          userId: params.userId,
+        },
+      });
+
+      logger.info('VIP pass checkout session created', {
+        sessionId: session.id,
+        customerId: params.customerId,
+        userId: params.userId,
+      });
+
+      return {
+        success: true,
+        sessionId: session.id,
+        url: session.url || undefined,
+      };
+    } catch (error) {
+      logError('Failed to create VIP pass checkout session', error as Error, {
+        customerId: params.customerId,
+        userId: params.userId,
       });
       return {
         success: false,
@@ -1848,7 +1898,7 @@ class StripeService {
    * Get price ID for a subscription plan
    */
   getPriceId(
-    plan: 'package_tool' | 'starter' | 'professional' | 'premium' | 'enterprise' | 'vip_access',
+    plan: 'starter' | 'professional' | 'premium',
     interval: 'monthly' | 'yearly'
   ): string {
     return SUBSCRIPTION_PRICE_IDS[plan][interval];
