@@ -626,7 +626,7 @@ class StripeService {
   }
 
   /**
-   * Create a Stripe Checkout Session for one-time credit report purchase ($55)
+   * Create a Stripe Checkout Session for one-time credit report purchase ($35)
    */
   async createCreditReportCheckout(params: {
     customerId: string;

@@ -832,7 +832,7 @@ export const checkOrUnlockCreditReport = asyncHandler(async (req: AuthRequest, r
   res.json({ success: true, data: { unlocked: true, free: false, newBalance: result.newBalance } });
 });
 
-// Creditsafe company search — open to all authenticated buyers (search is free, report costs $55)
+// Creditsafe company search — open to all authenticated buyers (search is free, report costs $35)
 export const creditsafeOpenSearch = asyncHandler(async (req: AuthRequest, res: Response) => {
   if (!req.user) {
     res.status(401).json({ success: false, error: 'Not authenticated' });
@@ -887,7 +887,7 @@ export const creditsafePurchasedReport = asyncHandler(async (req: AuthRequest, r
   res.json({ success: true, data: report });
 });
 
-// Create Stripe checkout session for one-time $55 credit report purchase
+// Create Stripe checkout session for one-time $35 credit report purchase
 export const createCreditReportCheckout = asyncHandler(async (req: AuthRequest, res: Response) => {
   if (!req.user) {
     res.status(401).json({ success: false, error: 'Not authenticated' });

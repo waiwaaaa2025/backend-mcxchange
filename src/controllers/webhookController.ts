@@ -792,7 +792,7 @@ async function handleCheckoutSessionCompleted(session: Stripe.Checkout.Session):
     });
   }
 
-  // Handle one-time credit report purchases ($55)
+  // Handle one-time credit report purchases ($35)
   if (type === 'credit_report_purchase') {
     const userId = metadata?.userId;
     const connectId = metadata?.connectId;
