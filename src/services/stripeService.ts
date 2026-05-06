@@ -88,10 +88,17 @@ export const SUBSCRIPTION_PRICE_IDS = {
     monthly: process.env.STRIPE_PRICE_ENTERPRISE_MONTHLY || 'price_enterprise_monthly',
     yearly: process.env.STRIPE_PRICE_ENTERPRISE_YEARLY || 'price_enterprise_yearly',
   },
-  // VIP / Deal Access Pass is a one-time payment (not a subscription).
-  // Use STRIPE_PRICE_VIP_ACCESS_ONETIME for the new $399 one-time price.
+  // VIP / Deal Access Pass is now a one-time payment ($399), but legacy
+  // monthly/yearly subscribers still exist on the old recurring price IDs.
   vip_access: {
     onetime: process.env.STRIPE_PRICE_VIP_ACCESS_ONETIME || 'price_vip_access_onetime',
+    monthly: process.env.STRIPE_PRICE_VIP_ACCESS_MONTHLY || '',
+    yearly: process.env.STRIPE_PRICE_VIP_ACCESS_YEARLY || '',
+  },
+  // CarrierPulse is a $12.99/mo add-on (legacy — bundled into all plans
+  // as of 2026-05). Existing standalone subscribers still recur here.
+  carrier_pulse: {
+    monthly: process.env.STRIPE_PRICE_CARRIER_PULSE || '',
   },
 };
 
@@ -844,6 +851,20 @@ class StripeService {
     } catch (error) {
       logError('Failed to list all subscriptions', error as Error);
       throw error;
+    }
+  }
+
+  /**
+   * Look up a Stripe price (with product expanded) — used by admin analytics
+   * to identify unmapped/legacy price IDs that don't match any env var.
+   */
+  async retrievePrice(priceId: string): Promise<Stripe.Price | null> {
+    if (!stripe) return null;
+    try {
+      return await stripe.prices.retrieve(priceId, { expand: ['product'] });
+    } catch (error) {
+      logError('Failed to retrieve Stripe price', error as Error, { priceId });
+      return null;
     }
   }
 

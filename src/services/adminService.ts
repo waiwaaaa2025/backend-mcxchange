@@ -38,6 +38,7 @@ import { emailService } from './emailService';
 import { adminNotificationService } from './adminNotificationService';
 import { config } from '../config';
 import logger from '../utils/logger';
+import type Stripe from 'stripe';
 import { stripeService, SUBSCRIPTION_PRICE_IDS } from './stripeService';
 import { buyerPreferencesService, BuyerPreferencesInput } from './buyerPreferencesService';
 import { rankListings, hasAnyCriteria } from './matchService';
@@ -2895,15 +2896,14 @@ class AdminService {
    */
   async getSubscriptionAnalytics() {
     // Build a reverse map: priceId -> { plan, interval }
-    // VIP / Deal Access Pass uses one-time pricing — counted as 'monthly' in this aggregation.
+    // Some plans have onetime + monthly/yearly variants (e.g. VIP legacy subs);
+    // register every defined price ID, not just the first kind found.
     const priceIdToPlan = new Map<string, { plan: string; interval: 'monthly' | 'yearly' }>();
     for (const [plan, prices] of Object.entries(SUBSCRIPTION_PRICE_IDS)) {
-      if ('onetime' in prices) {
-        if (prices.onetime) priceIdToPlan.set(prices.onetime, { plan, interval: 'monthly' });
-        continue;
-      }
-      if (prices.monthly) priceIdToPlan.set(prices.monthly, { plan, interval: 'monthly' });
-      if (prices.yearly) priceIdToPlan.set(prices.yearly, { plan, interval: 'yearly' });
+      const p = prices as { onetime?: string; monthly?: string; yearly?: string };
+      if (p.onetime) priceIdToPlan.set(p.onetime, { plan, interval: 'monthly' });
+      if (p.monthly) priceIdToPlan.set(p.monthly, { plan, interval: 'monthly' });
+      if (p.yearly) priceIdToPlan.set(p.yearly, { plan, interval: 'yearly' });
     }
 
     const subs = await stripeService.listAllSubscriptions('all');
@@ -2967,16 +2967,31 @@ class AdminService {
       return a.status.localeCompare(b.status);
     });
 
+    // Enrich unmapped price IDs with Stripe product details so admins can
+    // identify what each legacy price actually is (name, amount, interval).
+    const unmappedEntries = await Promise.all(
+      Array.from(unmappedPriceIds.entries()).map(async ([priceId, count]) => {
+        const price = await stripeService.retrievePrice(priceId);
+        const product = price?.product as Stripe.Product | undefined;
+        return {
+          priceId,
+          count,
+          productName: typeof product === 'object' ? product?.name ?? null : null,
+          nickname: price?.nickname ?? null,
+          unitAmount: price?.unit_amount ?? null,
+          currency: price?.currency ?? null,
+          interval: price?.recurring?.interval ?? null,
+        };
+      })
+    );
+
     return {
       byPlan,
       totals,
       totalSubscriptions: subs.length,
       mrrCents: mrrTotalCents,
       mrrDollars: mrrTotalCents / 100,
-      unmappedPriceIds: Array.from(unmappedPriceIds.entries()).map(([priceId, count]) => ({
-        priceId,
-        count,
-      })),
+      unmappedPriceIds: unmappedEntries,
     };
   }
 
