@@ -222,16 +222,10 @@ export const getCarrierPulseAccess = asyncHandler(async (req: AuthRequest, res: 
   const plan = subscription?.plan?.toUpperCase();
   const isActive = subscription?.status === SubscriptionStatus.ACTIVE;
 
-  // Professional, Premium, Enterprise, VIP get CarrierPulse included
-  const includedInPlan = isActive && (
-    plan === SubscriptionPlan.PACKAGE_TOOL ||
-    plan === SubscriptionPlan.PROFESSIONAL ||
-    plan === SubscriptionPlan.PREMIUM ||
-    plan === SubscriptionPlan.ENTERPRISE ||
-    plan === SubscriptionPlan.VIP_ACCESS
-  );
+  // CarrierPulse is included with any active subscription
+  const includedInPlan = isActive;
 
-  // Standalone CarrierPulse access (purchased separately or added to Starter)
+  // Standalone CarrierPulse access (legacy: purchased separately before bundling)
   const hasStandaloneAccess = user?.carrierPulseAccess || false;
 
   // Admin always has access
@@ -258,7 +252,6 @@ export const createCarrierPulseCheckout = asyncHandler(async (req: AuthRequest, 
   // Check if user already has CarrierPulse access
   const user = await User.findByPk(req.user.id);
   const subscription = await Subscription.findOne({ where: { userId: req.user.id } });
-  const plan = subscription?.plan?.toUpperCase();
   const isActive = subscription?.status === SubscriptionStatus.ACTIVE;
 
   if (user?.carrierPulseAccess) {
@@ -266,7 +259,7 @@ export const createCarrierPulseCheckout = asyncHandler(async (req: AuthRequest, 
     return;
   }
 
-  if (isActive && (plan === SubscriptionPlan.PACKAGE_TOOL || plan === SubscriptionPlan.PROFESSIONAL || plan === SubscriptionPlan.PREMIUM || plan === SubscriptionPlan.ENTERPRISE || plan === SubscriptionPlan.VIP_ACCESS)) {
+  if (isActive) {
     res.json({ success: false, error: 'CarrierPulse is already included in your subscription' });
     return;
   }
@@ -730,14 +723,11 @@ export const getCarrierPulseCreditsafeSearch = asyncHandler(async (req: AuthRequ
     return;
   }
 
-  // Check CarrierPulse access
+  // Check CarrierPulse access — included with any active subscription
   const user = await User.findByPk(req.user.id);
   const subscription = await Subscription.findOne({ where: { userId: req.user.id } });
-  const plan = subscription?.plan?.toUpperCase();
   const isActive = subscription?.status === SubscriptionStatus.ACTIVE;
-  const hasAccess = req.user.role === UserRole.ADMIN ||
-    user?.carrierPulseAccess ||
-    (isActive && (plan === SubscriptionPlan.PACKAGE_TOOL || plan === SubscriptionPlan.PROFESSIONAL || plan === SubscriptionPlan.PREMIUM || plan === SubscriptionPlan.ENTERPRISE || plan === SubscriptionPlan.VIP_ACCESS));
+  const hasAccess = req.user.role === UserRole.ADMIN || user?.carrierPulseAccess || isActive;
 
   if (!hasAccess) {
     res.status(403).json({ success: false, error: 'CarrierPulse access required' });
@@ -773,14 +763,11 @@ export const getCarrierPulseCreditsafeReport = asyncHandler(async (req: AuthRequ
     return;
   }
 
-  // Check CarrierPulse access
+  // Check CarrierPulse access — included with any active subscription
   const user = await User.findByPk(req.user.id);
   const subscription = await Subscription.findOne({ where: { userId: req.user.id } });
-  const plan = subscription?.plan?.toUpperCase();
   const isActive = subscription?.status === SubscriptionStatus.ACTIVE;
-  const hasAccess = req.user.role === UserRole.ADMIN ||
-    user?.carrierPulseAccess ||
-    (isActive && (plan === SubscriptionPlan.PACKAGE_TOOL || plan === SubscriptionPlan.PROFESSIONAL || plan === SubscriptionPlan.PREMIUM || plan === SubscriptionPlan.ENTERPRISE || plan === SubscriptionPlan.VIP_ACCESS));
+  const hasAccess = req.user.role === UserRole.ADMIN || user?.carrierPulseAccess || isActive;
 
   if (!hasAccess) {
     res.status(403).json({ success: false, error: 'CarrierPulse access required' });
