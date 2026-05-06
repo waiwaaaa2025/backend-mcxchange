@@ -80,6 +80,12 @@ export const SUBSCRIPTION_PRICE_IDS = {
     monthly: process.env.STRIPE_PRICE_PROFESSIONAL_MONTHLY || 'price_professional_monthly',
     yearly: process.env.STRIPE_PRICE_PROFESSIONAL_YEARLY || 'price_professional_yearly',
   },
+  // Package Tool / Pulse Bundle — grandfathered ($14.99/mo, tools only).
+  // No longer offered to new signups; existing subs being migrated to
+  // CarrierPulse standalone ($12.99/mo).
+  package_tool: {
+    monthly: process.env.STRIPE_PRICE_PACKAGE_TOOL_MONTHLY || 'price_1TFIVRFnDj2YhGIWVhMNe62E',
+  },
   premium: {
     monthly: process.env.STRIPE_PRICE_PREMIUM_MONTHLY || 'price_premium_monthly',
     yearly: process.env.STRIPE_PRICE_PREMIUM_YEARLY || 'price_premium_yearly',
