@@ -28,6 +28,8 @@ import {
   adminApproveOffer,
   adminForwardOffer,
   adminRejectOffer,
+  adminAcceptOfferOnBehalf,
+  adminRejectOfferOnBehalf,
   adminDeleteOffer,
   createUser,
   createUserValidation,
@@ -49,6 +51,8 @@ import {
   recordManualDepositValidation,
   getUserListingsForDeposit,
   cancelUserSubscription,
+  resetUserPassword,
+  resetUserPasswordValidation,
   getSubscriptionAnalytics,
   getAdminUserPreferences,
   updateAdminUserPreferences,
@@ -108,6 +112,7 @@ router.post('/users/:id/credits', validate(adjustCreditsValidation), adjustUserC
 router.get('/users/:id/listings-for-deposit', getUserListingsForDeposit);
 router.post('/users/:id/manual-deposit', validate(recordManualDepositValidation), recordManualDeposit);
 router.post('/users/:id/cancel-subscription', cancelUserSubscription);
+router.post('/users/:id/reset-password', validate(resetUserPasswordValidation), resetUserPassword);
 
 // Buyer preferences (admin view/edit) + match suggestions
 router.get('/users/:id/preferences', getAdminUserPreferences);
@@ -131,6 +136,8 @@ router.get('/offers', getAllOffers);
 router.post('/offers/:id/approve', adminApproveOffer);
 router.post('/offers/:id/forward', adminForwardOffer);
 router.post('/offers/:id/reject', adminRejectOffer);
+router.post('/offers/:id/accept-on-behalf', adminAcceptOfferOnBehalf);
+router.post('/offers/:id/reject-on-behalf', adminRejectOfferOnBehalf);
 router.delete('/offers/:id', adminDeleteOffer);
 
 // Action log

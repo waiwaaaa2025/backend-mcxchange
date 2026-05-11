@@ -510,6 +510,44 @@ export const adminRejectOffer = asyncHandler(async (req: AuthRequest, res: Respo
   });
 });
 
+// Accept offer on behalf of seller (admin override)
+export const adminAcceptOfferOnBehalf = asyncHandler(async (req: AuthRequest, res: Response) => {
+  if (!req.user) {
+    res.status(401).json({ success: false, error: 'Not authenticated' });
+    return;
+  }
+
+  const { id } = req.params;
+  const { notes } = req.body;
+
+  const result = await adminService.acceptOfferOnBehalfOfSeller(id, req.user.id, notes);
+
+  res.json({
+    success: true,
+    data: result,
+    message: 'Offer accepted on behalf of seller. Buyer will be notified to pay deposit.',
+  });
+});
+
+// Reject offer on behalf of seller (admin override)
+export const adminRejectOfferOnBehalf = asyncHandler(async (req: AuthRequest, res: Response) => {
+  if (!req.user) {
+    res.status(401).json({ success: false, error: 'Not authenticated' });
+    return;
+  }
+
+  const { id } = req.params;
+  const { reason } = req.body;
+
+  const offer = await adminService.rejectOfferOnBehalfOfSeller(id, req.user.id, reason);
+
+  res.json({
+    success: true,
+    data: offer,
+    message: 'Offer rejected on behalf of seller. Buyer will be notified.',
+  });
+});
+
 // Delete offer (admin)
 export const adminDeleteOffer = asyncHandler(async (req: AuthRequest, res: Response) => {
   if (!req.user) {
@@ -997,6 +1035,32 @@ export const cancelUserSubscription = asyncHandler(async (req: AuthRequest, res:
     success: true,
     data: result,
     message: 'Subscription cancelled successfully',
+  });
+});
+
+// ============================================
+// Reset User Password
+// ============================================
+
+export const resetUserPasswordValidation = [
+  body('newPassword').isLength({ min: 8 }).withMessage('Password must be at least 8 characters'),
+];
+
+export const resetUserPassword = asyncHandler(async (req: AuthRequest, res: Response) => {
+  if (!req.user) {
+    res.status(401).json({ success: false, error: 'Not authenticated' });
+    return;
+  }
+
+  const { id: userId } = req.params;
+  const { newPassword } = req.body;
+
+  const result = await adminService.resetUserPassword(userId, newPassword, req.user.id);
+
+  res.json({
+    success: true,
+    data: result,
+    message: result.message,
   });
 });
 

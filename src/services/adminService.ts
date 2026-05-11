@@ -12,6 +12,7 @@ import {
   Notification,
   PlatformSetting,
   RefreshToken,
+  PasswordResetToken,
   Offer,
   AccountDispute,
   UnlockedListing,
@@ -2887,6 +2888,38 @@ class AdminService {
       stripeCancelled,
       subscription,
     };
+  }
+
+  async resetUserPassword(userId: string, newPassword: string, adminId: string) {
+    const user = await User.findByPk(userId);
+    if (!user) {
+      throw new NotFoundError('User');
+    }
+
+    if (typeof newPassword !== 'string' || newPassword.length < config.security.passwordMinLength) {
+      throw new BadRequestError(`Password must be at least ${config.security.passwordMinLength} characters`);
+    }
+
+    const bcrypt = require('bcryptjs');
+    const hashedPassword = await bcrypt.hash(newPassword, config.security.bcryptRounds);
+
+    await user.update({ password: hashedPassword });
+
+    await RefreshToken.destroy({ where: { userId } });
+    await PasswordResetToken.update(
+      { usedAt: new Date() },
+      { where: { userId, usedAt: null } }
+    );
+
+    await AdminAction.create({
+      adminId,
+      action: 'RESET_USER_PASSWORD',
+      targetType: 'USER',
+      targetId: userId,
+      reason: 'Password reset by admin',
+    });
+
+    return { message: 'Password reset successfully. User has been logged out of all devices.' };
   }
 
   /**
