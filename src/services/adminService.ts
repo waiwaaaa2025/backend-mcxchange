@@ -2890,6 +2890,71 @@ class AdminService {
     };
   }
 
+  async deleteUser(userId: string, adminId: string) {
+    const user = await User.findByPk(userId);
+    if (!user) {
+      throw new NotFoundError('User');
+    }
+
+    if (user.role === UserRole.ADMIN) {
+      throw new ForbiddenError('Admin accounts cannot be deleted from the users panel');
+    }
+
+    if (userId === adminId) {
+      throw new ForbiddenError('You cannot delete your own account');
+    }
+
+    // Cancel any active subscription first (keeps Stripe + DB in sync per CLAUDE.md)
+    const subscription = await Subscription.findOne({ where: { userId } });
+    if (subscription && subscription.status === SubscriptionStatus.ACTIVE) {
+      try {
+        await this.cancelUserSubscription(userId, adminId);
+      } catch (err) {
+        logger.warn('Failed to cancel subscription during user delete; proceeding with anonymization', {
+          userId,
+          error: (err as Error).message,
+        });
+      }
+    }
+
+    // Anonymize PII so business records (offers, transactions, listings) stay intact
+    const anonEmail = `deleted-${user.id.slice(0, 8)}-${Date.now()}@deleted.local`;
+    await user.update({
+      email: anonEmail,
+      name: 'Deleted User',
+      phone: null,
+      avatar: null,
+      companyName: null,
+      companyAddress: null,
+      city: null,
+      state: null,
+      zipCode: null,
+      ein: null,
+      mcNumber: null,
+      dotNumber: null,
+      status: UserStatus.SUSPENDED,
+      verified: false,
+      sellerVerified: false,
+      emailVerified: false,
+      identityVerified: false,
+    } as any);
+
+    await RefreshToken.destroy({ where: { userId } });
+    await PasswordResetToken.destroy({ where: { userId } });
+
+    await AdminAction.create({
+      adminId,
+      action: 'DELETE_USER',
+      targetType: 'USER',
+      targetId: userId,
+      reason: 'User deleted by admin (soft-delete: PII anonymized, business records retained)',
+    });
+
+    logger.info('User deleted (soft) by admin', { userId, adminId });
+
+    return { message: 'User deleted. PII anonymized and account suspended; historical records retained.' };
+  }
+
   async resetUserPassword(userId: string, newPassword: string, adminId: string) {
     const user = await User.findByPk(userId);
     if (!user) {

@@ -1039,6 +1039,27 @@ export const cancelUserSubscription = asyncHandler(async (req: AuthRequest, res:
 });
 
 // ============================================
+// Delete User (soft delete)
+// ============================================
+
+export const deleteUser = asyncHandler(async (req: AuthRequest, res: Response) => {
+  if (!req.user) {
+    res.status(401).json({ success: false, error: 'Not authenticated' });
+    return;
+  }
+
+  const { id: userId } = req.params;
+
+  const result = await adminService.deleteUser(userId, req.user.id);
+
+  res.json({
+    success: true,
+    data: result,
+    message: result.message,
+  });
+});
+
+// ============================================
 // Reset User Password
 // ============================================
 

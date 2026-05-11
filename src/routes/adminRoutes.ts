@@ -53,6 +53,7 @@ import {
   cancelUserSubscription,
   resetUserPassword,
   resetUserPasswordValidation,
+  deleteUser,
   getSubscriptionAnalytics,
   getAdminUserPreferences,
   updateAdminUserPreferences,
@@ -113,6 +114,7 @@ router.get('/users/:id/listings-for-deposit', getUserListingsForDeposit);
 router.post('/users/:id/manual-deposit', validate(recordManualDepositValidation), recordManualDeposit);
 router.post('/users/:id/cancel-subscription', cancelUserSubscription);
 router.post('/users/:id/reset-password', validate(resetUserPasswordValidation), resetUserPassword);
+router.delete('/users/:id', deleteUser);
 
 // Buyer preferences (admin view/edit) + match suggestions
 router.get('/users/:id/preferences', getAdminUserPreferences);
