@@ -228,11 +228,13 @@ interface UserAttributes {
   identityVerificationStatus?: string;
   carrierPulseAccess: boolean;
   carrierPulseStripeSubId?: string;
+  promoAccessType?: string;
+  promoAccessExpiresAt?: Date;
   createdAt?: Date;
   updatedAt?: Date;
 }
 
-interface UserCreationAttributes extends Optional<UserAttributes, 'id' | 'phone' | 'avatar' | 'status' | 'verified' | 'verifiedAt' | 'trustScore' | 'memberSince' | 'lastLoginAt' | 'companyName' | 'companyAddress' | 'city' | 'state' | 'zipCode' | 'ein' | 'mcNumber' | 'dotNumber' | 'sellerVerified' | 'sellerVerifiedAt' | 'totalCredits' | 'usedCredits' | 'stripeCustomerId' | 'stripeAccountId' | 'emailVerified' | 'identityVerified' | 'identityVerifiedAt' | 'stripeVerificationSessionId' | 'identityVerificationStatus' | 'carrierPulseAccess' | 'carrierPulseStripeSubId' | 'createdAt' | 'updatedAt'> {}
+interface UserCreationAttributes extends Optional<UserAttributes, 'id' | 'phone' | 'avatar' | 'status' | 'verified' | 'verifiedAt' | 'trustScore' | 'memberSince' | 'lastLoginAt' | 'companyName' | 'companyAddress' | 'city' | 'state' | 'zipCode' | 'ein' | 'mcNumber' | 'dotNumber' | 'sellerVerified' | 'sellerVerifiedAt' | 'totalCredits' | 'usedCredits' | 'stripeCustomerId' | 'stripeAccountId' | 'emailVerified' | 'identityVerified' | 'identityVerifiedAt' | 'stripeVerificationSessionId' | 'identityVerificationStatus' | 'carrierPulseAccess' | 'carrierPulseStripeSubId' | 'promoAccessType' | 'promoAccessExpiresAt' | 'createdAt' | 'updatedAt'> {}
 
 // ==================== USER MODEL ====================
 
@@ -271,6 +273,8 @@ export class User extends Model<UserAttributes, UserCreationAttributes> implemen
   declare identityVerificationStatus: string | undefined;
   declare carrierPulseAccess: boolean;
   declare carrierPulseStripeSubId: string | undefined;
+  declare promoAccessType: string | undefined;
+  declare promoAccessExpiresAt: Date | undefined;
   declare readonly createdAt: Date;
   declare readonly updatedAt: Date;
 
@@ -419,6 +423,14 @@ User.init(
     },
     carrierPulseStripeSubId: {
       type: DataTypes.STRING(255),
+      allowNull: true,
+    },
+    promoAccessType: {
+      type: DataTypes.STRING(32),
+      allowNull: true,
+    },
+    promoAccessExpiresAt: {
+      type: DataTypes.DATE,
       allowNull: true,
     },
   },
@@ -2537,6 +2549,83 @@ UserTermsAcceptance.init(
   }
 );
 
+// ==================== PDF PURCHASE MODEL ====================
+// Tracks one-time PDF / bundle purchases via Stripe Payment Links
+
+export enum PdfPurchaseTier {
+  PDF = 'pdf',
+  PDF_PLUS_60DAY = 'pdf_plus_60day',
+}
+
+export class PdfPurchase extends Model {
+  declare id: string;
+  declare email: string;
+  declare stripeSessionId: string;
+  declare tier: PdfPurchaseTier;
+  declare downloadToken: string;
+  declare downloadCount: number;
+  declare lastDownloadedAt: Date | undefined;
+  declare userId: string | undefined;
+  declare amountCents: number | undefined;
+  declare readonly createdAt: Date;
+  declare readonly updatedAt: Date;
+}
+
+PdfPurchase.init(
+  {
+    id: {
+      type: DataTypes.UUID,
+      defaultValue: DataTypes.UUIDV4,
+      primaryKey: true,
+    },
+    email: {
+      type: DataTypes.STRING(255),
+      allowNull: false,
+    },
+    stripeSessionId: {
+      type: DataTypes.STRING(255),
+      allowNull: false,
+      unique: true,
+    },
+    tier: {
+      type: DataTypes.STRING(32),
+      allowNull: false,
+    },
+    downloadToken: {
+      type: DataTypes.STRING(128),
+      allowNull: false,
+      unique: true,
+    },
+    downloadCount: {
+      type: DataTypes.INTEGER,
+      allowNull: false,
+      defaultValue: 0,
+    },
+    lastDownloadedAt: {
+      type: DataTypes.DATE,
+      allowNull: true,
+    },
+    userId: {
+      type: DataTypes.UUID,
+      allowNull: true,
+    },
+    amountCents: {
+      type: DataTypes.INTEGER,
+      allowNull: true,
+    },
+  },
+  {
+    sequelize,
+    tableName: 'pdf_purchases',
+    indexes: [
+      { fields: ['email'] },
+      { unique: true, fields: ['downloadToken'] },
+      { unique: true, fields: ['stripeSessionId'] },
+      { fields: ['userId'] },
+    ],
+  }
+);
+
 // ==================== PROCESSED WEBHOOK EVENT MODEL ====================
 // Used for webhook idempotency - prevents duplicate processing of Stripe events
 
@@ -2950,5 +3039,6 @@ export default {
   AccountDispute,
   ProcessedWebhookEvent,
   UserTermsAcceptance,
+  PdfPurchase,
   sequelize,
 };

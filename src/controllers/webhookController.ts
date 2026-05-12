@@ -5,6 +5,10 @@ import { creditService } from '../services/creditService';
 import { emailService } from '../services/emailService';
 import { notificationService } from '../services/notificationService';
 import {
+  processPdfPurchase,
+  processBundlePurchase,
+} from '../services/buyerGuideService';
+import {
   User,
   Payment,
   Subscription,
@@ -840,6 +844,16 @@ async function handleCheckoutSessionCompleted(session: Stripe.Checkout.Session):
         link: `/buyer/creditsafe?connectId=${connectId}`,
       });
     }
+  }
+
+  // Handle buyer's-guide PDF-only purchase ($15)
+  if (type === 'guide_pdf') {
+    await processPdfPurchase(session);
+  }
+
+  // Handle buyer's-guide bundle: PDF + 60-day Pro access ($49)
+  if (type === 'guide_pdf_bundle') {
+    await processBundlePurchase(session);
   }
 }
 
