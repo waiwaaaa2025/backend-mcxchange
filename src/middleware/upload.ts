@@ -226,7 +226,11 @@ export const uploadTruckPhotos = (req: Request, res: Response, next: NextFunctio
  * Extracts the S3 key from a full S3 URL or uses the string as-is if it's already a key.
  * Returns null if S3 is not configured or the URL is not an S3 URL.
  */
-export async function getPresignedUrl(url: string, expiresIn: number = 3600): Promise<string | null> {
+export async function getPresignedUrl(
+  url: string,
+  expiresIn: number = 3600,
+  responseContentDisposition?: string
+): Promise<string | null> {
   if (!s3Client) return null;
 
   const bucket = config.upload.s3.bucket;
@@ -248,6 +252,9 @@ export async function getPresignedUrl(url: string, expiresIn: number = 3600): Pr
   const command = new GetObjectCommand({
     Bucket: bucket,
     Key: key,
+    ...(responseContentDisposition
+      ? { ResponseContentDisposition: responseContentDisposition }
+      : {}),
   });
 
   return getSignedUrl(s3Client, command, { expiresIn });
