@@ -4,6 +4,20 @@ import { config } from '../config';
 import { AuthRequest, JWTPayload } from '../types';
 import { User, UserRole, Subscription, SubscriptionPlan } from '../models';
 
+/**
+ * Returns true if the user has an active Buyer's-Guide 60-day promo access.
+ * Used as a fallback inside subscription middlewares so bundle buyers can
+ * use Premium/Enterprise-gated due-diligence routes during their 60 days.
+ */
+function hasActiveBundlePromo(user: {
+  promoAccessType?: string | null;
+  promoAccessExpiresAt?: Date | null;
+}): boolean {
+  if (user.promoAccessType !== 'pdf_bundle_60day') return false;
+  if (!user.promoAccessExpiresAt) return false;
+  return new Date(user.promoAccessExpiresAt).getTime() > Date.now();
+}
+
 // Verify JWT token
 export const authenticate = async (
   req: AuthRequest,
@@ -61,6 +75,8 @@ export const authenticate = async (
       name: user.name,
       stripeCustomerId: user.stripeCustomerId,
       identityVerified: user.identityVerified,
+      promoAccessType: user.promoAccessType,
+      promoAccessExpiresAt: user.promoAccessExpiresAt,
     };
 
     next();
@@ -239,6 +255,12 @@ export const requireProfessionalSubscription = async (
       return;
     }
 
+    // Buyer's-Guide 60-day bundle grants Premium-equivalent access during its window
+    if (hasActiveBundlePromo(req.user)) {
+      next();
+      return;
+    }
+
     // Check for active Professional or Enterprise subscription
     const subscription = await Subscription.findOne({
       where: {
@@ -302,6 +324,12 @@ export const requireEnterpriseSubscription = async (
 
     // Admins bypass subscription check
     if (req.user.role === UserRole.ADMIN) {
+      next();
+      return;
+    }
+
+    // Buyer's-Guide 60-day bundle grants Enterprise-equivalent access during its window
+    if (hasActiveBundlePromo(req.user)) {
       next();
       return;
     }

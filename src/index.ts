@@ -19,6 +19,7 @@ import { conditionalRequestLogger, errorLogger } from './middleware/requestLogge
 import { globalLimiter, initializeRateLimiters } from './middleware/rateLimiter';
 import logger from './utils/logger';
 import { authService } from './services/authService';
+import { expireOverdueBundleAccess } from './services/buyerGuideService';
 
 // ============================================
 // Setup Global Error Handlers
@@ -182,6 +183,18 @@ const startServer = async () => {
         logger.error('Token cleanup failed', { error });
       }
     }, 60 * 60 * 1000); // 1 hour
+
+    // Schedule expired buyer-bundle promo-access cleanup (every 6 hours)
+    setInterval(async () => {
+      try {
+        const expired = await expireOverdueBundleAccess();
+        if (expired.length > 0) {
+          logger.info('Expired buyer-bundle promo access batch', { count: expired.length });
+        }
+      } catch (error) {
+        logger.error('Bundle promo expiry sweep failed', { error });
+      }
+    }, 6 * 60 * 60 * 1000); // 6 hours
 
     // Start listening
     httpServer.listen(config.port, () => {

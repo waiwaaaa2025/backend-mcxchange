@@ -10,6 +10,8 @@ export interface AuthRequest extends Request {
     name: string;
     stripeCustomerId?: string | null;
     identityVerified?: boolean;
+    promoAccessType?: string | null;
+    promoAccessExpiresAt?: Date | null;
   };
 }
 
