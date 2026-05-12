@@ -846,15 +846,58 @@ async function handleCheckoutSessionCompleted(session: Stripe.Checkout.Session):
     }
   }
 
-  // Handle buyer's-guide PDF-only purchase ($15)
-  if (type === 'guide_pdf') {
+  // Buyer's-guide tier detection: metadata.type wins; otherwise fall back to
+  // matching the purchased price ID against env vars. This lets Stripe
+  // Payment Links work without anyone having to set metadata manually.
+  const guideTier = await detectGuideTier(session, type);
+  if (guideTier === 'guide_pdf') {
     await processPdfPurchase(session);
-  }
-
-  // Handle buyer's-guide bundle: PDF + 60-day Pro access ($49)
-  if (type === 'guide_pdf_bundle') {
+  } else if (guideTier === 'guide_pdf_bundle') {
     await processBundlePurchase(session);
   }
+}
+
+/**
+ * Returns 'guide_pdf', 'guide_pdf_bundle', or null based on:
+ *  1. session.metadata.type (cheapest — no extra API call)
+ *  2. The price IDs on the session's line items vs env vars
+ */
+async function detectGuideTier(
+  session: Stripe.Checkout.Session,
+  metadataType: string | undefined
+): Promise<'guide_pdf' | 'guide_pdf_bundle' | null> {
+  if (metadataType === 'guide_pdf') return 'guide_pdf';
+  if (metadataType === 'guide_pdf_bundle') return 'guide_pdf_bundle';
+
+  // If metadata.type is set to anything else (deposit, listing_fee, etc.),
+  // don't second-guess it — only fall back when type is absent.
+  if (metadataType) return null;
+
+  const guidePriceId = process.env.STRIPE_PRICE_GUIDE_PDF;
+  const bundlePriceId = process.env.STRIPE_PRICE_GUIDE_BUNDLE;
+  if (!guidePriceId && !bundlePriceId) return null;
+
+  const stripe = stripeService.getStripe();
+  if (!stripe) return null;
+
+  try {
+    const full = await stripe.checkout.sessions.retrieve(session.id, {
+      expand: ['line_items'],
+    });
+    const priceIds = (full.line_items?.data || [])
+      .map((li) => li.price?.id)
+      .filter((id): id is string => Boolean(id));
+
+    if (bundlePriceId && priceIds.includes(bundlePriceId)) return 'guide_pdf_bundle';
+    if (guidePriceId && priceIds.includes(guidePriceId)) return 'guide_pdf';
+  } catch (error) {
+    logger.warn('Failed to look up line items for guide tier detection', {
+      sessionId: session.id,
+      error: error instanceof Error ? error.message : error,
+    });
+  }
+
+  return null;
 }
 
 // ============================================
