@@ -10,6 +10,7 @@ import { User, UnlockedListing, Listing, Subscription, SubscriptionPlan, Subscri
 import { creditService } from '../services/creditService';
 import { buyerPreferencesService } from '../services/buyerPreferencesService';
 import { rankListings, hasAnyCriteria } from '../services/matchService';
+import { hasActiveBundlePromo } from '../utils/bundlePromo';
 
 function maskNumber(num: string | null | undefined): string | null | undefined {
   if (!num) return num;
@@ -228,16 +229,30 @@ export const getCarrierPulseAccess = asyncHandler(async (req: AuthRequest, res: 
   // Standalone CarrierPulse access (legacy: purchased separately before bundling)
   const hasStandaloneAccess = user?.carrierPulseAccess || false;
 
+  // Buyer's-Guide 60-day bundle includes CarrierPulse access for the promo window
+  const bundlePromo = hasActiveBundlePromo(user);
+
   // Admin always has access
   const isAdmin = req.user.role === UserRole.ADMIN;
+
+  const reason = isAdmin
+    ? 'admin'
+    : includedInPlan
+      ? 'included_in_plan'
+      : hasStandaloneAccess
+        ? 'standalone'
+        : bundlePromo
+          ? 'bundle_promo'
+          : 'none';
 
   res.json({
     success: true,
     data: {
-      hasAccess: includedInPlan || hasStandaloneAccess || isAdmin,
-      reason: isAdmin ? 'admin' : includedInPlan ? 'included_in_plan' : hasStandaloneAccess ? 'standalone' : 'none',
+      hasAccess: includedInPlan || hasStandaloneAccess || isAdmin || bundlePromo,
+      reason,
       currentPlan: plan || null,
       isActive,
+      promoExpiresAt: bundlePromo ? user?.promoAccessExpiresAt : null,
     },
   });
 });
@@ -723,11 +738,15 @@ export const getCarrierPulseCreditsafeSearch = asyncHandler(async (req: AuthRequ
     return;
   }
 
-  // Check CarrierPulse access — included with any active subscription
+  // Check CarrierPulse access — included with any active subscription or 60-day bundle promo
   const user = await User.findByPk(req.user.id);
   const subscription = await Subscription.findOne({ where: { userId: req.user.id } });
   const isActive = subscription?.status === SubscriptionStatus.ACTIVE;
-  const hasAccess = req.user.role === UserRole.ADMIN || user?.carrierPulseAccess || isActive;
+  const hasAccess =
+    req.user.role === UserRole.ADMIN ||
+    user?.carrierPulseAccess ||
+    isActive ||
+    hasActiveBundlePromo(user);
 
   if (!hasAccess) {
     res.status(403).json({ success: false, error: 'CarrierPulse access required' });
@@ -763,11 +782,15 @@ export const getCarrierPulseCreditsafeReport = asyncHandler(async (req: AuthRequ
     return;
   }
 
-  // Check CarrierPulse access — included with any active subscription
+  // Check CarrierPulse access — included with any active subscription or 60-day bundle promo
   const user = await User.findByPk(req.user.id);
   const subscription = await Subscription.findOne({ where: { userId: req.user.id } });
   const isActive = subscription?.status === SubscriptionStatus.ACTIVE;
-  const hasAccess = req.user.role === UserRole.ADMIN || user?.carrierPulseAccess || isActive;
+  const hasAccess =
+    req.user.role === UserRole.ADMIN ||
+    user?.carrierPulseAccess ||
+    isActive ||
+    hasActiveBundlePromo(user);
 
   if (!hasAccess) {
     res.status(403).json({ success: false, error: 'CarrierPulse access required' });
@@ -795,8 +818,15 @@ export const checkOrUnlockCreditReport = asyncHandler(async (req: AuthRequest, r
   const isActive = subscription?.status === SubscriptionStatus.ACTIVE;
   const isAdmin = req.user.role === UserRole.ADMIN;
 
-  // Premium (and grandfathered Enterprise) and VIP / Deal Access Pass get credit reports free; admin always free
+  // Bundle promo loads the user row to read promoAccessType/promoAccessExpiresAt
+  const userForPromo = await User.findByPk(req.user.id, {
+    attributes: ['promoAccessType', 'promoAccessExpiresAt'],
+  });
+  const bundlePromo = hasActiveBundlePromo(userForPromo);
+
+  // Premium (and grandfathered Enterprise), VIP / Deal Access Pass, or active 60-day bundle promo get credit reports free; admin always free
   const isFree = isAdmin ||
+    bundlePromo ||
     (isActive && (plan === SubscriptionPlan.PREMIUM || plan === SubscriptionPlan.ENTERPRISE || plan === SubscriptionPlan.VIP_ACCESS));
 
   if (isFree) {

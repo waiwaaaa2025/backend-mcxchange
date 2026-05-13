@@ -14,10 +14,11 @@ import {
 import { emailService } from '../services/emailService';
 import { config } from '../config';
 import logger from '../utils/logger';
+import { BUNDLE_PROMO_ACCESS_TYPE, hasActiveBundlePromo } from '../utils/bundlePromo';
 
 const BUNDLE_DAYS = 60;
 const SETUP_TOKEN_DAYS = 7;
-const PROMO_ACCESS_TYPE = 'pdf_bundle_60day';
+const PROMO_ACCESS_TYPE = BUNDLE_PROMO_ACCESS_TYPE;
 
 export interface GuidePurchaseResult {
   purchase: PdfPurchase;
@@ -120,6 +121,28 @@ async function createSetupLink(user: User): Promise<string> {
   });
 
   return `${config.frontendUrl}/reset-password?token=${token}&setup=1`;
+}
+
+/**
+ * Return an existing unused/unexpired setup link if one exists, otherwise
+ * create a fresh one. Used by the post-purchase endpoint so refreshes don't
+ * invalidate the link the user already received via email.
+ */
+export async function getOrCreateSetupLink(user: User): Promise<string> {
+  const existing = await PasswordResetToken.findOne({
+    where: {
+      userId: user.id,
+      usedAt: null,
+      expiresAt: { [Op.gt]: new Date() },
+    },
+    order: [['createdAt', 'DESC']],
+  });
+
+  if (existing) {
+    return `${config.frontendUrl}/reset-password?token=${existing.token}&setup=1`;
+  }
+
+  return createSetupLink(user);
 }
 
 function downloadUrl(token: string): string {
@@ -248,9 +271,7 @@ export async function processBundlePurchase(
  * Returns true if a user currently has an active 60-day buyer's-guide promo.
  */
 export function hasBundlePromoAccess(user: User): boolean {
-  if (user.promoAccessType !== PROMO_ACCESS_TYPE) return false;
-  if (!user.promoAccessExpiresAt) return false;
-  return user.promoAccessExpiresAt.getTime() > Date.now();
+  return hasActiveBundlePromo(user);
 }
 
 /**
