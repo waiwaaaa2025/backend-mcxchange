@@ -11,6 +11,12 @@ import { creditService } from '../services/creditService';
 import { buyerPreferencesService } from '../services/buyerPreferencesService';
 import { rankListings, hasAnyCriteria } from '../services/matchService';
 import { hasActiveBundlePromo } from '../utils/bundlePromo';
+import {
+  getCreditReportEntitlement,
+  hasPulledThisMonth,
+  recordFreePull,
+  entitlementForApi,
+} from '../services/entitlementService';
 
 function maskNumber(num: string | null | undefined): string | null | undefined {
   if (!num) return num;
@@ -891,7 +897,9 @@ export const creditsafeOpenSearch = asyncHandler(async (req: AuthRequest, res: R
   });
 });
 
-// Creditsafe report — for purchased reports (check purchase status first)
+// Creditsafe report — serves if user has either paid the $35, has already
+// pulled this carrier free in the current month, or has free quota remaining
+// via their bundle/Premium/Enterprise/VIP entitlement. Admins always free.
 export const creditsafePurchasedReport = asyncHandler(async (req: AuthRequest, res: Response) => {
   if (!req.user) {
     res.status(401).json({ success: false, error: 'Not authenticated' });
@@ -901,23 +909,54 @@ export const creditsafePurchasedReport = asyncHandler(async (req: AuthRequest, r
   const { connectId } = req.params;
   const isAdmin = req.user.role === UserRole.ADMIN;
 
-  if (!isAdmin) {
-    // Must have a one-time purchase — no subscription bypass
-    const reference = `credit_report_purchase:${connectId}`;
-    const existing = await CreditTransaction.findOne({
-      where: { userId: req.user.id, reference, type: CreditTransactionType.USAGE },
+  let allowed = isAdmin;
+  let burnEntitlement: 'bundle' | 'premium' | 'enterprise' | 'vip' | null = null;
+
+  if (!allowed) {
+    const paid = await CreditTransaction.findOne({
+      where: {
+        userId: req.user.id,
+        reference: `credit_report_purchase:${connectId}`,
+        type: CreditTransactionType.USAGE,
+      },
     });
-    if (!existing) {
-      res.status(403).json({ success: false, error: 'Credit report not purchased. Please purchase access first.' });
-      return;
+    if (paid) {
+      allowed = true;
+    } else if (await hasPulledThisMonth(req.user.id, connectId)) {
+      // Same carrier pulled earlier this month under the entitlement — free re-view.
+      allowed = true;
+    } else {
+      const entitlement = await getCreditReportEntitlement(req.user.id);
+      if (entitlement.source && entitlement.source !== 'admin' && (entitlement.isUnlimited || entitlement.remaining > 0)) {
+        allowed = true;
+        burnEntitlement = entitlement.source;
+      }
     }
   }
 
+  if (!allowed) {
+    res.status(403).json({ success: false, error: 'Credit report not purchased. Please purchase access first.' });
+    return;
+  }
+
   const report = await creditsafeService.getCreditReport(connectId, { includeIndicators: true });
+
+  // Record the free pull after the API call succeeds — never burn quota on a
+  // failed fetch. VIP is unlimited but we still record for analytics.
+  if (burnEntitlement) {
+    try {
+      await recordFreePull(req.user.id, connectId, burnEntitlement);
+    } catch {
+      // Tracking failure is non-fatal — the buyer already got their report.
+    }
+  }
+
   res.json({ success: true, data: report });
 });
 
-// Create Stripe checkout session for one-time $35 credit report purchase
+// Create Stripe checkout session for one-time $35 credit report purchase.
+// If the buyer has free entitlement (bundle/Premium/Enterprise/VIP), we skip
+// Stripe entirely and grant access against their monthly quota.
 export const createCreditReportCheckout = asyncHandler(async (req: AuthRequest, res: Response) => {
   if (!req.user) {
     res.status(401).json({ success: false, error: 'Not authenticated' });
@@ -937,6 +976,38 @@ export const createCreditReportCheckout = asyncHandler(async (req: AuthRequest, 
   });
   if (existing) {
     res.json({ success: false, error: 'You have already purchased this credit report' });
+    return;
+  }
+
+  // Free-entitlement short-circuit: bundle, Premium, Enterprise, VIP, or admin.
+  // We record the pull so the carrier shows as "already unlocked" to the frontend
+  // and the quota is decremented for the rest of the month.
+  const isAdmin = req.user.role === UserRole.ADMIN;
+  const alreadyPulled = await hasPulledThisMonth(req.user.id, connectId);
+  if (alreadyPulled) {
+    res.json({ success: true, data: { free: true, alreadyUnlocked: true, connectId } });
+    return;
+  }
+  const entitlement = await getCreditReportEntitlement(req.user.id, { isAdmin });
+  if (entitlement.source && (entitlement.isUnlimited || entitlement.remaining > 0)) {
+    if (entitlement.source !== 'admin') {
+      await recordFreePull(req.user.id, connectId, entitlement.source);
+    }
+    res.json({
+      success: true,
+      data: {
+        free: true,
+        alreadyUnlocked: true,
+        connectId,
+        entitlement: entitlementForApi({
+          ...entitlement,
+          used: entitlement.used + (entitlement.source === 'admin' ? 0 : 1),
+          remaining: entitlement.isUnlimited
+            ? Infinity
+            : Math.max(0, entitlement.monthlyQuota - (entitlement.used + 1)),
+        }),
+      },
+    });
     return;
   }
 
@@ -974,7 +1045,9 @@ export const createCreditReportCheckout = asyncHandler(async (req: AuthRequest, 
   });
 });
 
-// Check if a credit report has been purchased for a given connectId
+// Check if a credit report is accessible: either paid one-time ($35), already
+// pulled this month under an entitlement, or covered by remaining entitlement
+// quota. Returns enough info for the frontend to render the right CTA.
 export const checkCreditReportPurchase = asyncHandler(async (req: AuthRequest, res: Response) => {
   if (!req.user) {
     res.status(401).json({ success: false, error: 'Not authenticated' });
@@ -984,19 +1057,37 @@ export const checkCreditReportPurchase = asyncHandler(async (req: AuthRequest, r
   const { connectId } = req.params;
   const isAdmin = req.user.role === UserRole.ADMIN;
 
-  // Admin always has access
   if (isAdmin) {
-    res.json({ success: true, data: { purchased: true, free: true } });
+    res.json({ success: true, data: { purchased: true, free: true, price: 35 } });
     return;
   }
 
-  // Check one-time purchase only — no subscription bypass
-  const reference = `credit_report_purchase:${connectId}`;
-  const existing = await CreditTransaction.findOne({
-    where: { userId: req.user.id, reference, type: CreditTransactionType.USAGE },
+  const paid = await CreditTransaction.findOne({
+    where: {
+      userId: req.user.id,
+      reference: `credit_report_purchase:${connectId}`,
+      type: CreditTransactionType.USAGE,
+    },
   });
 
-  res.json({ success: true, data: { purchased: !!existing, free: false, price: 35 } });
+  const alreadyFreeThisMonth = !paid && (await hasPulledThisMonth(req.user.id, connectId));
+  const entitlement = await getCreditReportEntitlement(req.user.id);
+  const canPullFreeNow =
+    !paid &&
+    !alreadyFreeThisMonth &&
+    !!entitlement.source &&
+    (entitlement.isUnlimited || entitlement.remaining > 0);
+
+  res.json({
+    success: true,
+    data: {
+      purchased: !!paid || alreadyFreeThisMonth,
+      free: alreadyFreeThisMonth || canPullFreeNow,
+      canPullFreeNow,
+      price: 35,
+      entitlement: entitlementForApi(entitlement),
+    },
+  });
 });
 
 // ============================================
