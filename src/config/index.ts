@@ -87,6 +87,7 @@ export const config = {
   // MorPro Carrier API
   morproCarrier: {
     baseUrl: process.env.MORPRO_CARRIER_API_URL || 'http://194.195.92.25:3001',
+    apiKey: process.env.MORPRO_CARRIER_API_KEY || '',
   },
 
   // FMCSA
@@ -234,6 +235,10 @@ export function validateConfig(): void {
   // ============================================
   if (!process.env.MORPRO_CARRIER_API_URL) {
     warnings.push('MORPRO_CARRIER_API_URL not set - using default http://194.195.92.25:3001');
+  }
+
+  if (!process.env.MORPRO_CARRIER_API_KEY) {
+    warnings.push('MORPRO_CARRIER_API_KEY not set - MorPro requests will go unauthenticated (works today, will break when MorPro enforces auth)');
   }
 
   if (!process.env.FMCSA_API_KEY) {

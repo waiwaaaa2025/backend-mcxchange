@@ -3,10 +3,16 @@ import { MorProCarrierReport } from '../types/carrierData';
 import cacheService from './cacheService';
 import logger from '../utils/logger';
 
-function fetchWithTimeout(url: string, options: RequestInit = {}, timeoutMs = 5000): Promise<Response> {
+function morproHeaders(): Record<string, string> {
+  const key = config.morproCarrier.apiKey;
+  return key ? { 'X-API-Key': key } : {};
+}
+
+function fetchWithTimeout(url: string, options: RequestInit = {}, timeoutMs = 10000): Promise<Response> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
-  return fetch(url, { ...options, signal: controller.signal }).finally(() => clearTimeout(timer));
+  const headers = { ...morproHeaders(), ...(options.headers || {}) };
+  return fetch(url, { ...options, headers, signal: controller.signal }).finally(() => clearTimeout(timer));
 }
 
 // Fetch a single endpoint, return null on failure
