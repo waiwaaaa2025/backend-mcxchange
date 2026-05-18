@@ -13,6 +13,8 @@ import {
   verifySeller,
   getPremiumRequests,
   updatePremiumRequest,
+  getBrokerOutreachRequests,
+  updateBrokerOutreachRequest,
   getAllListings,
   getAllTransactions,
   getActionLog,
@@ -127,6 +129,10 @@ router.get('/analytics/subscriptions', getSubscriptionAnalytics);
 // Premium requests
 router.get('/premium-requests', getPremiumRequests);
 router.put('/premium-requests/:id', updatePremiumRequest);
+
+// Broker outreach (Pending Insurance Leads)
+router.get('/broker-outreach', getBrokerOutreachRequests);
+router.put('/broker-outreach/:id', updateBrokerOutreachRequest);
 
 // Transactions
 router.get('/transactions', getAllTransactions);

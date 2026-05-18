@@ -32,6 +32,8 @@ import {
   PaymentMethod,
   SubscriptionStatus,
   Subscription,
+  BrokerOutreachRequest,
+  BrokerOutreachStatus,
 } from '../models';
 import { NotFoundError, BadRequestError, ForbiddenError } from '../middleware/errorHandler';
 import { getPaginationInfo, calculateDeposit, calculatePlatformFee } from '../utils/helpers';
@@ -609,6 +611,65 @@ class AdminService {
       requests,
       pagination: getPaginationInfo(page, limit, total),
     };
+  }
+
+  // ---- Broker Outreach (Pending Insurance Leads) ----
+
+  async getBrokerOutreachRequests(status?: BrokerOutreachStatus, page: number = 1, limit: number = 20) {
+    const offset = (page - 1) * limit;
+    const where = status ? { status } : {};
+
+    const { count: total, rows: requests } = await BrokerOutreachRequest.findAndCountAll({
+      where,
+      order: [['createdAt', 'DESC']],
+      offset,
+      limit,
+      include: [
+        {
+          model: User,
+          as: 'user',
+          attributes: ['id', 'name', 'email', 'phone', 'trustScore'],
+        },
+      ],
+    });
+
+    return {
+      requests,
+      pagination: getPaginationInfo(page, limit, total),
+    };
+  }
+
+  async updateBrokerOutreachRequest(
+    requestId: string,
+    adminId: string,
+    status: BrokerOutreachStatus,
+    notes?: string
+  ) {
+    const request = await BrokerOutreachRequest.findByPk(requestId);
+    if (!request) {
+      throw new NotFoundError('Broker outreach request');
+    }
+
+    const wasContacted = request.status !== BrokerOutreachStatus.PENDING;
+
+    request.status = status;
+    if (notes !== undefined) request.adminNotes = notes;
+    if (!wasContacted && status !== BrokerOutreachStatus.PENDING) {
+      request.contactedAt = new Date();
+      request.contactedBy = adminId;
+    }
+    await request.save();
+
+    await AdminAction.create({
+      adminId,
+      action: 'UPDATE_BROKER_OUTREACH',
+      targetType: 'BROKER_OUTREACH_REQUEST',
+      targetId: requestId,
+      reason: notes,
+      metadata: JSON.stringify({ status, dotNumber: request.dotNumber }),
+    });
+
+    return request;
   }
 
   // Update premium request

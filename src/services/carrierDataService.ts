@@ -1,5 +1,9 @@
 import { config } from '../config';
-import { MorProCarrierReport } from '../types/carrierData';
+import {
+  MorProCarrierReport,
+  InsuranceLeadFilters,
+  InsuranceLeadsResult,
+} from '../types/carrierData';
 import cacheService from './cacheService';
 import logger from '../utils/logger';
 
@@ -116,6 +120,59 @@ class CarrierDataService {
       return report;
     } catch (error) {
       logger.error('Carrier data fetch error', error as Error, { dotNumber });
+      return null;
+    }
+  }
+
+  /**
+   * Cross-carrier insurance lead search.
+   * Proxies the MorPro /api/carriers/search endpoint (which runs the same
+   * pending/expiring derivation we apply per-DOT, but across all carriers).
+   * Cached in Redis for 1h keyed by the serialized filter set.
+   */
+  async searchInsuranceLeads(
+    filters: InsuranceLeadFilters,
+    page = 1,
+    limit = 25
+  ): Promise<InsuranceLeadsResult | null> {
+    const safeLimit = Math.min(Math.max(limit, 1), 100);
+    const safePage = Math.max(page, 1);
+
+    const params = new URLSearchParams();
+    if (filters.insuranceStatus) params.set('insuranceStatus', filters.insuranceStatus);
+    if (filters.expiringWithinDays != null)
+      params.set('expiringWithinDays', String(filters.expiringWithinDays));
+    if (filters.state) params.set('state', filters.state);
+    if (filters.minUnits != null) params.set('minUnits', String(filters.minUnits));
+    if (filters.maxUnits != null) params.set('maxUnits', String(filters.maxUnits));
+    if (filters.minSafety) params.set('minSafety', filters.minSafety);
+    if (filters.sort) params.set('sort', filters.sort);
+    params.set('page', String(safePage));
+    params.set('limit', String(safeLimit));
+
+    const query = params.toString();
+    const cacheKey = `insurance_leads:${query}`;
+
+    try {
+      const cached = await cacheService.get<InsuranceLeadsResult>(cacheKey);
+      if (cached) {
+        logger.info(`Insurance leads cache HIT (${query})`);
+        return cached;
+      }
+
+      const url = `${this.baseUrl}/api/carriers/search?${query}`;
+      const res = await fetchWithTimeout(url);
+      if (!res.ok) {
+        logger.warn(`MorPro insurance lead search failed: ${res.status} (${query})`);
+        return null;
+      }
+
+      const data = (await res.json()) as InsuranceLeadsResult;
+      // 1h TTL — insurance status changes daily at most
+      await cacheService.set(cacheKey, data, 3600);
+      return data;
+    } catch (error) {
+      logger.error('Insurance lead search error', error as Error, { query });
       return null;
     }
   }

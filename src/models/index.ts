@@ -175,6 +175,15 @@ export enum PremiumRequestStatus {
   CANCELLED = 'CANCELLED'
 }
 
+export enum BrokerOutreachStatus {
+  PENDING = 'PENDING',
+  CONTACTED = 'CONTACTED',
+  NEGOTIATING = 'NEGOTIATING',
+  COMPLETED = 'COMPLETED',
+  CLOSED = 'CLOSED',
+  FAILED = 'FAILED'
+}
+
 export enum ConsultationStatus {
   PENDING_PAYMENT = 'PENDING_PAYMENT',
   PAID = 'PAID',
@@ -2175,6 +2184,83 @@ PremiumRequest.init(
   }
 );
 
+// ==================== BROKER OUTREACH REQUEST MODEL ====================
+// "Ask Domilea to contact the seller" — a buyer asks Domilea staff to reach out
+// to a carrier owner (found via the Pending Insurance Leads tool) on their behalf.
+
+export class BrokerOutreachRequest extends Model {
+  declare id: string;
+  declare status: BrokerOutreachStatus;
+  declare dotNumber: string;
+  declare mcNumber?: string;
+  declare carrierName?: string;
+  declare buyerMessage?: string;
+  declare adminNotes?: string;
+  declare contactedAt?: Date;
+  declare contactedBy?: string;
+  declare userId: string;
+  declare readonly createdAt: Date;
+  declare readonly updatedAt: Date;
+
+  // Associations (populated when included in queries)
+  declare user?: User;
+}
+
+BrokerOutreachRequest.init(
+  {
+    id: {
+      type: DataTypes.UUID,
+      defaultValue: DataTypes.UUIDV4,
+      primaryKey: true,
+    },
+    status: {
+      type: DataTypes.ENUM(...Object.values(BrokerOutreachStatus)),
+      defaultValue: BrokerOutreachStatus.PENDING,
+    },
+    dotNumber: {
+      type: DataTypes.STRING(20),
+      allowNull: false,
+    },
+    mcNumber: {
+      type: DataTypes.STRING(20),
+      allowNull: true,
+    },
+    carrierName: {
+      type: DataTypes.STRING(255),
+      allowNull: true,
+    },
+    buyerMessage: {
+      type: DataTypes.TEXT,
+      allowNull: true,
+    },
+    adminNotes: {
+      type: DataTypes.TEXT,
+      allowNull: true,
+    },
+    contactedAt: {
+      type: DataTypes.DATE,
+      allowNull: true,
+    },
+    contactedBy: {
+      type: DataTypes.UUID,
+      allowNull: true,
+    },
+    userId: {
+      type: DataTypes.UUID,
+      allowNull: false,
+    },
+  },
+  {
+    sequelize,
+    tableName: 'broker_outreach_requests',
+    indexes: [
+      { fields: ['status'] },
+      { fields: ['userId'] },
+      { fields: ['dotNumber'] },
+    ],
+  }
+);
+
 // ==================== ADMIN ACTION MODEL ====================
 
 export class AdminAction extends Model {
@@ -2992,6 +3078,9 @@ Notification.belongsTo(User, { foreignKey: 'userId', as: 'user' });
 PremiumRequest.belongsTo(User, { foreignKey: 'buyerId', as: 'buyer' });
 PremiumRequest.belongsTo(Listing, { foreignKey: 'listingId', as: 'listing' });
 
+// BrokerOutreachRequest associations
+BrokerOutreachRequest.belongsTo(User, { foreignKey: 'userId', as: 'user' });
+
 // AdminAction associations
 AdminAction.belongsTo(User, { foreignKey: 'adminId', as: 'admin' });
 
@@ -3033,6 +3122,7 @@ export default {
   Message,
   Notification,
   PremiumRequest,
+  BrokerOutreachRequest,
   AdminAction,
   PlatformSetting,
   Consultation,

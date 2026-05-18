@@ -30,6 +30,8 @@ import {
   getMyPreferences,
   updateMyPreferences,
   getMyMatches,
+  getInsuranceLeads,
+  requestBrokerOutreach,
 } from '../controllers/buyerController';
 import { authenticate, buyerOnly, requireSubscription, requireProfessionalSubscription, requireEnterpriseSubscription } from '../middleware/auth';
 
@@ -74,6 +76,11 @@ router.post('/carrier-pulse/checkout', createCarrierPulseCheckout);
 router.get('/carrier-pulse/creditsafe/search', getCarrierPulseCreditsafeSearch);
 router.get('/carrier-pulse/creditsafe/report/:connectId', getCarrierPulseCreditsafeReport);
 router.get('/carrier-pulse/credit-report/:dotNumber', requireSubscription, checkOrUnlockCreditReport);
+
+// Pending Insurance Leads - same access gate as CarrierPulse (handled in endpoint)
+router.get('/insurance-leads', getInsuranceLeads);
+router.get('/insurance-leads/access', getCarrierPulseAccess);
+router.post('/insurance-leads/:dotNumber/request-outreach', requestBrokerOutreach);
 
 // Credit report — open to all buyers (search free, report $35 or included in Premium)
 router.get('/creditsafe/open-search', creditsafeOpenSearch);

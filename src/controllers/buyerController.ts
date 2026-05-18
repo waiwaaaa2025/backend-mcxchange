@@ -6,11 +6,14 @@ import { asyncHandler, BadRequestError } from '../middleware/errorHandler';
 import { AuthRequest } from '../types';
 import { parseIntParam } from '../utils/helpers';
 import { config } from '../config';
-import { User, UnlockedListing, Listing, Subscription, SubscriptionPlan, SubscriptionStatus, UserRole, CreditTransaction, CreditTransactionType, ListingStatus } from '../models';
+import { User, UnlockedListing, Listing, Subscription, SubscriptionPlan, SubscriptionStatus, UserRole, CreditTransaction, CreditTransactionType, ListingStatus, BrokerOutreachRequest } from '../models';
+import { adminNotificationService } from '../services/adminNotificationService';
 import { creditService } from '../services/creditService';
 import { buyerPreferencesService } from '../services/buyerPreferencesService';
 import { rankListings, hasAnyCriteria } from '../services/matchService';
 import { hasActiveBundlePromo } from '../utils/bundlePromo';
+import carrierDataService from '../services/carrierDataService';
+import { InsuranceLeadFilters } from '../types/carrierData';
 import {
   getCreditReportEntitlement,
   hasPulledThisMonth,
@@ -807,6 +810,116 @@ export const getCarrierPulseCreditsafeReport = asyncHandler(async (req: AuthRequ
   const report = await creditsafeService.getCreditReport(connectId, { includeIndicators: true });
 
   res.json({ success: true, data: report });
+});
+
+// Shared access gate — Pending Insurance Leads uses the same entitlement as CarrierPulse
+// (any active subscription, standalone access, 60-day bundle promo, or admin).
+async function hasCarrierPulseAccess(userId: string, role: UserRole): Promise<boolean> {
+  const user = await User.findByPk(userId);
+  const subscription = await Subscription.findOne({ where: { userId } });
+  const isActive = subscription?.status === SubscriptionStatus.ACTIVE;
+  return (
+    role === UserRole.ADMIN ||
+    !!user?.carrierPulseAccess ||
+    !!isActive ||
+    hasActiveBundlePromo(user)
+  );
+}
+
+// Pending Insurance Leads — filterable list of carriers with pending/expiring insurance.
+export const getInsuranceLeads = asyncHandler(async (req: AuthRequest, res: Response) => {
+  if (!req.user) {
+    res.status(401).json({ success: false, error: 'Not authenticated' });
+    return;
+  }
+
+  if (!(await hasCarrierPulseAccess(req.user.id, req.user.role))) {
+    res.status(403).json({ success: false, error: 'CarrierPulse access required', code: 'CARRIER_PULSE_REQUIRED' });
+    return;
+  }
+
+  const q = req.query;
+  const statusParam = String(q.insuranceStatus || 'pending');
+  const filters: InsuranceLeadFilters = {
+    insuranceStatus: statusParam === 'expiring' ? 'expiring' : 'pending',
+    expiringWithinDays: q.expiringWithinDays ? parseIntParam(q.expiringWithinDays as string) : undefined,
+    state: q.state ? String(q.state).toUpperCase() : undefined,
+    minUnits: q.minUnits ? parseIntParam(q.minUnits as string) : undefined,
+    maxUnits: q.maxUnits ? parseIntParam(q.maxUnits as string) : undefined,
+    minSafety: q.minSafety ? String(q.minSafety) : undefined,
+    sort: q.sort ? String(q.sort) : 'daysUntilExpiry',
+  };
+  const page = q.page ? parseIntParam(q.page as string) : 1;
+  const limit = q.limit ? parseIntParam(q.limit as string) : 25;
+
+  const result = await carrierDataService.searchInsuranceLeads(filters, page, limit);
+
+  if (!result) {
+    res.status(502).json({
+      success: false,
+      error: 'Lead search is temporarily unavailable. Please try again shortly.',
+      code: 'LEAD_SEARCH_UNAVAILABLE',
+    });
+    return;
+  }
+
+  res.json({ success: true, data: result });
+});
+
+// "Ask Domilea to contact the seller" — buyer requests Domilea-brokered outreach
+// to a carrier owner found via the Pending Insurance Leads tool.
+export const requestBrokerOutreach = asyncHandler(async (req: AuthRequest, res: Response) => {
+  if (!req.user) {
+    res.status(401).json({ success: false, error: 'Not authenticated' });
+    return;
+  }
+
+  if (!(await hasCarrierPulseAccess(req.user.id, req.user.role))) {
+    res.status(403).json({ success: false, error: 'CarrierPulse access required', code: 'CARRIER_PULSE_REQUIRED' });
+    return;
+  }
+
+  const { dotNumber } = req.params;
+  if (!dotNumber) {
+    throw new BadRequestError('DOT number is required');
+  }
+
+  const { mcNumber, carrierName, message } = req.body || {};
+
+  // One open request per buyer+carrier — reuse the existing one if present.
+  const existing = await BrokerOutreachRequest.findOne({
+    where: { userId: req.user.id, dotNumber: String(dotNumber) },
+  });
+  if (existing && existing.status === 'PENDING') {
+    res.json({
+      success: true,
+      data: existing,
+      message: 'You already have a pending outreach request for this carrier.',
+    });
+    return;
+  }
+
+  const request = await BrokerOutreachRequest.create({
+    userId: req.user.id,
+    dotNumber: String(dotNumber),
+    mcNumber: mcNumber ? String(mcNumber) : undefined,
+    carrierName: carrierName ? String(carrierName) : undefined,
+    buyerMessage: message ? String(message) : undefined,
+  });
+
+  const user = await User.findByPk(req.user.id);
+  await adminNotificationService.notifyNewInquiry({
+    senderName: user?.name || 'Buyer',
+    senderEmail: user?.email || 'unknown',
+    messageContent: `Broker outreach requested for carrier ${carrierName || ''} (DOT ${dotNumber}${mcNumber ? `, ${mcNumber}` : ''}).${message ? ` Buyer note: ${message}` : ''}`,
+    listingInfo: `Broker Outreach · DOT ${dotNumber}`,
+  });
+
+  res.status(201).json({
+    success: true,
+    data: request,
+    message: 'Request received. Domilea will reach out to the carrier owner on your behalf.',
+  });
 });
 
 // Check if a credit report is unlocked for a given DOT number, and unlock it (costs 2 credits for Starter/Premium)

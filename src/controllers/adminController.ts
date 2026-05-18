@@ -3,7 +3,7 @@ import { body } from 'express-validator';
 import { adminService } from '../services/adminService';
 import { asyncHandler, NotFoundError, BadRequestError } from '../middleware/errorHandler';
 import { AuthRequest } from '../types';
-import { PremiumRequestStatus, Transaction, User, Listing, TransactionTimeline, Notification, TransactionStatus, NotificationType } from '../models';
+import { PremiumRequestStatus, Transaction, User, Listing, TransactionTimeline, Notification, TransactionStatus, NotificationType, BrokerOutreachStatus } from '../models';
 import { parseIntParam, parseBooleanParam } from '../utils/helpers';
 import { stripeService } from '../services/stripeService';
 import { pricingConfigService } from '../services/pricingConfigService';
@@ -262,6 +262,45 @@ export const updatePremiumRequest = asyncHandler(async (req: AuthRequest, res: R
     success: true,
     data: request,
     message: 'Premium request updated',
+  });
+});
+
+// Get broker outreach requests (Pending Insurance Leads)
+export const getBrokerOutreachRequests = asyncHandler(async (req: AuthRequest, res: Response) => {
+  const status = req.query.status as BrokerOutreachStatus | undefined;
+  const page = parseIntParam(req.query.page as string) || 1;
+  const limit = parseIntParam(req.query.limit as string) || 20;
+
+  const result = await adminService.getBrokerOutreachRequests(status, page, limit);
+
+  res.json({
+    success: true,
+    data: result.requests,
+    pagination: result.pagination,
+  });
+});
+
+// Update broker outreach request
+export const updateBrokerOutreachRequest = asyncHandler(async (req: AuthRequest, res: Response) => {
+  if (!req.user) {
+    res.status(401).json({ success: false, error: 'Not authenticated' });
+    return;
+  }
+
+  const { id } = req.params;
+  const { status, notes } = req.body;
+
+  const request = await adminService.updateBrokerOutreachRequest(
+    id,
+    req.user.id,
+    status as BrokerOutreachStatus,
+    notes
+  );
+
+  res.json({
+    success: true,
+    data: request,
+    message: 'Broker outreach request updated',
   });
 });
 

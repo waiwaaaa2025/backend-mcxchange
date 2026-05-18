@@ -17,3 +17,34 @@ export interface MorProCarrierReport {
   monitoring: any;    // null placeholders (future)
   compliance: any;    // null placeholders (future)
 }
+
+// Pending Insurance Leads — cross-carrier search (MorPro /api/carriers/search)
+export interface InsuranceLeadFilters {
+  insuranceStatus?: 'pending' | 'expiring';
+  expiringWithinDays?: number;
+  state?: string;
+  minUnits?: number;
+  maxUnits?: number;
+  minSafety?: string;
+  sort?: string;
+}
+
+export interface InsuranceLead {
+  dotNumber: string;
+  mcNumber: string | null;
+  legalName: string;
+  state: string | null;
+  powerUnits: number | null;
+  safetyRating: string | null;
+  insuranceStatus: 'pending' | 'expiring';
+  insuranceExpiryDate: string | null;
+  daysUntilExpiry: number | null;
+  pendingReason: string | null;
+}
+
+export interface InsuranceLeadsResult {
+  total: number;
+  page: number;
+  limit: number;
+  results: InsuranceLead[];
+}
