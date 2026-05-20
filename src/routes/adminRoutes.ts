@@ -78,6 +78,7 @@ import {
   voidAdminInvoice,
   releasePayoutToSeller,
   checkSellerInstantPayoutEligibility,
+  reassignTransactionParty,
 } from '../controllers/adminController';
 import { authenticate, adminOnly } from '../middleware/auth';
 import validate from '../middleware/validate';
@@ -136,6 +137,7 @@ router.put('/broker-outreach/:id', updateBrokerOutreachRequest);
 
 // Transactions
 router.get('/transactions', getAllTransactions);
+router.patch('/transactions/:id/parties', reassignTransactionParty);
 router.post('/transactions/:id/release-payout', releasePayoutToSeller);
 router.get('/transactions/:id/instant-payout-eligibility', checkSellerInstantPayoutEligibility);
 

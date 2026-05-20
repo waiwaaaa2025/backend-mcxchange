@@ -337,6 +337,13 @@ export const getAllTransactions = asyncHandler(async (req: AuthRequest, res: Res
   });
 });
 
+export const reassignTransactionParty = asyncHandler(async (req: AuthRequest, res: Response) => {
+  const { id } = req.params;
+  const { buyerId, sellerId } = req.body || {};
+  const result = await adminService.reassignTransactionParty(id, req.user!.id, { buyerId, sellerId });
+  res.json({ success: true, data: result });
+});
+
 // Get admin action log
 export const getActionLog = asyncHandler(async (req: AuthRequest, res: Response) => {
   const adminId = req.query.adminId as string | undefined;

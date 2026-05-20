@@ -1076,6 +1076,96 @@ class AdminService {
     };
   }
 
+  // Reassign the buyer and/or seller on a transaction (admin override)
+  async reassignTransactionParty(
+    transactionId: string,
+    adminId: string,
+    data: { buyerId?: string; sellerId?: string }
+  ) {
+    if (!data.buyerId && !data.sellerId) {
+      throw new BadRequestError('Must provide buyerId or sellerId');
+    }
+
+    const transaction = await Transaction.findByPk(transactionId);
+    if (!transaction) {
+      throw new NotFoundError('Transaction');
+    }
+
+    const updates: { buyerId?: string; sellerId?: string } = {};
+    const timelineLines: string[] = [];
+    const auditMeta: Record<string, string | undefined> = {};
+
+    const newBuyerId = data.buyerId && data.buyerId !== transaction.buyerId ? data.buyerId : undefined;
+    const newSellerId = data.sellerId && data.sellerId !== transaction.sellerId ? data.sellerId : undefined;
+
+    if (!newBuyerId && !newSellerId) {
+      throw new BadRequestError('No changes — provided ids match current parties');
+    }
+
+    // Validate the resulting buyer and seller are not the same person
+    const resultingBuyerId = newBuyerId ?? transaction.buyerId;
+    const resultingSellerId = newSellerId ?? transaction.sellerId;
+    if (resultingBuyerId === resultingSellerId) {
+      throw new BadRequestError('Buyer and seller cannot be the same user');
+    }
+
+    if (newBuyerId) {
+      const buyer = await User.findByPk(newBuyerId);
+      if (!buyer) throw new NotFoundError('New buyer');
+      if (buyer.role !== UserRole.BUYER && buyer.role !== UserRole.ADMIN) {
+        throw new BadRequestError('New buyer must have BUYER role');
+      }
+      if (buyer.status === UserStatus.BLOCKED || buyer.status === UserStatus.SUSPENDED) {
+        throw new BadRequestError('New buyer account is suspended or blocked');
+      }
+      updates.buyerId = newBuyerId;
+      auditMeta.previousBuyerId = transaction.buyerId;
+      auditMeta.newBuyerId = newBuyerId;
+      timelineLines.push(`Buyer reassigned from ${transaction.buyerId} to ${newBuyerId}`);
+    }
+
+    if (newSellerId) {
+      const seller = await User.findByPk(newSellerId);
+      if (!seller) throw new NotFoundError('New seller');
+      if (seller.role !== UserRole.SELLER && seller.role !== UserRole.ADMIN) {
+        throw new BadRequestError('New seller must have SELLER role');
+      }
+      if (seller.status === UserStatus.BLOCKED || seller.status === UserStatus.SUSPENDED) {
+        throw new BadRequestError('New seller account is suspended or blocked');
+      }
+      updates.sellerId = newSellerId;
+      auditMeta.previousSellerId = transaction.sellerId;
+      auditMeta.newSellerId = newSellerId;
+      timelineLines.push(`Seller reassigned from ${transaction.sellerId} to ${newSellerId}`);
+    }
+
+    await transaction.update(updates);
+
+    await AdminAction.create({
+      adminId,
+      action: 'REASSIGN_TRANSACTION_PARTY',
+      targetType: 'TRANSACTION',
+      targetId: transactionId,
+      metadata: JSON.stringify(auditMeta),
+    });
+
+    await TransactionTimeline.create({
+      transactionId,
+      status: transaction.status,
+      title: 'Transaction parties reassigned',
+      description: timelineLines.join('\n'),
+      actorId: adminId,
+      actorRole: UserRole.ADMIN,
+    });
+
+    return Transaction.findByPk(transactionId, {
+      include: [
+        { model: User, as: 'buyer', attributes: ['id', 'name', 'email'] },
+        { model: User, as: 'seller', attributes: ['id', 'name', 'email'] },
+      ],
+    });
+  }
+
   // Get admin action log
   async getAdminActionLog(adminId?: string, page: number = 1, limit: number = 50) {
     const offset = (page - 1) * limit;
