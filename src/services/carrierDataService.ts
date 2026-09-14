@@ -6,7 +6,7 @@ import {
   InsuranceLeadsResult,
 } from '../types/carrierData';
 import cacheService from './cacheService';
-import morproLinqService, { type LinqCarrierRow, type LinqSearchFilters } from './morproLinqService';
+import morproLinqService, { safetyLabel, type LinqSearchFilters } from './morproLinqService';
 import logger from '../utils/logger';
 import { AppError, TooManyRequestsError } from '../middleware/errorHandler';
 
@@ -37,9 +37,6 @@ const legacyUpstream: CarrierUpstream = {
 function isoDateOffset(days: number): string {
   return new Date(Date.now() + days * 86_400_000).toISOString().slice(0, 10);
 }
-
-// LINQ returns FMCSA safety rating codes; the UI shows words.
-const SAFETY_LABELS: Record<string, string> = { S: 'Satisfactory', C: 'Conditional', U: 'Unsatisfactory' };
 
 // Whole days from today (UTC) to a YYYY-MM-DD date; negative once it has passed.
 function daysUntil(isoDate: string): number {
@@ -365,7 +362,6 @@ class CarrierDataService {
   ): Promise<InsuranceLeadsResult | null> {
     const safeLimit = Math.min(Math.max(limit, 1), 50);
     const windowDays = Math.min(Math.max(filters.expiringWithinDays ?? 30, 1), 90);
-    const safetyCode = filters.minSafety ? filters.minSafety.trim().charAt(0).toUpperCase() : null;
 
     // FMCSA insurance has no expiry date — a lapse is always a filed cancellation
     // with a future effective date, so "pending" and "expiring" are the same query.
@@ -379,9 +375,9 @@ class CarrierDataService {
     if (filters.state) base.state = filters.state.toUpperCase();
     if (filters.minUnits != null) base.min_fleet_size = filters.minUnits;
     if (filters.maxUnits != null) base.max_fleet_size = filters.maxUnits;
+    if (filters.minSafety) base.safety_rating = filters.minSafety;
 
-    const cacheKey = `insurance_leads:v3:${JSON.stringify({ ...base, safetyCode, cursor, safeLimit })}`;
-    const MAX_LINQ_PAGES = 5;
+    const cacheKey = `insurance_leads:v4:${JSON.stringify({ ...base, cursor, safeLimit })}`;
 
     try {
       const cached = await cacheService.get<InsuranceLeadsResult>(cacheKey);
@@ -390,26 +386,17 @@ class CarrierDataService {
         return cached;
       }
 
-      // Whole LINQ pages only, so the returned cursor never skips rows.
-      const rows: LinqCarrierRow[] = [];
-      let next: string | number | null = cursor;
-      let hasMore = true;
-      let partial = false;
-      for (let i = 0; i < MAX_LINQ_PAGES && rows.length < safeLimit && hasMore; i++) {
-        const search = await morproLinqService.searchCarriers(next != null ? { ...base, cursor: next } : base);
-        if (!search) {
-          if (i === 0) {
-            logger.warn(`LINQ insurance lead search failed (${cacheKey})`);
-            return null;
-          }
-          partial = true;
-          break;
-        }
-        const page = search.carriers || [];
-        rows.push(...(safetyCode ? page.filter((r) => (r.safety_rating || '').toUpperCase().startsWith(safetyCode)) : page));
-        next = search.next_cursor ?? null;
-        hasMore = !!search.has_more && next != null;
+      // Whole LINQ pages only, so the returned cursor never skips rows. Safety,
+      // and status alongside state, are matched on our side (splitLocalFilters).
+      const search = await morproLinqService.searchCarriersFiltered(
+        { ...base, ...(cursor != null ? { cursor } : {}) },
+        { minRows: safeLimit }
+      );
+      if (!search) {
+        logger.warn(`LINQ insurance lead search failed (${cacheKey})`);
+        return null;
       }
+      const rows = search.carriers;
 
       const results = await Promise.all(
         rows.map(async (row): Promise<InsuranceLead> => {
@@ -427,9 +414,7 @@ class CarrierDataService {
             legalName: row.legal_name || row.dba_name || `DOT ${dot}`,
             state: row.state,
             powerUnits: row.power_units,
-            safetyRating: row.safety_rating
-              ? SAFETY_LABELS[row.safety_rating.toUpperCase()] ?? row.safety_rating
-              : null,
+            safetyRating: safetyLabel(row.safety_rating),
             insuranceStatus: 'pending',
             insuranceExpiryDate: cancelDate,
             daysUntilExpiry: cancelDate ? daysUntil(cancelDate) : null,
@@ -444,13 +429,13 @@ class CarrierDataService {
       const data: InsuranceLeadsResult = {
         total: results.length,
         limit: safeLimit,
-        hasMore,
-        nextCursor: hasMore && next != null ? String(next) : null,
+        hasMore: search.hasMore,
+        nextCursor: search.nextCursor != null ? String(search.nextCursor) : null,
         results,
       };
       // 1h TTL — insurance filings change daily at most. Don't cache a batch
       // cut short by a mid-walk LINQ failure.
-      if (!partial) await cacheService.set(cacheKey, data, 3600);
+      if (!search.partial) await cacheService.set(cacheKey, data, 3600);
       return data;
     } catch (error) {
       logger.error('Insurance lead search error', error as Error, { cacheKey });

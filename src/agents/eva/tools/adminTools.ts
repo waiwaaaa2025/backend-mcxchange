@@ -66,13 +66,13 @@ export function buildAdminTools(): ToolDef[] {
           filters.insurance_cancels_before = isoDateOffset(args.insuranceExpiresWithinDays);
           filters.has_active_insurance = true;
         }
-        const res = await morproLinqService.searchCarriers(filters);
+        // Safety rating (and status alongside state) are matched on our side.
+        const res = await morproLinqService.searchCarriersFiltered(filters);
         if (!res) return { error: 'LINQ search failed' };
         return {
-          limit: res.limit,
-          has_more: res.has_more,
-          next_cursor: res.next_cursor ?? null,
-          returned: res.carriers?.length || 0,
+          has_more: res.hasMore,
+          next_cursor: res.nextCursor ?? null,
+          returned: res.carriers.length,
           carriers: res.carriers,
         };
       },

@@ -53,6 +53,50 @@ export interface LinqSearchResult {
   carriers: LinqCarrierRow[];
 }
 
+// FMCSA safety rating codes as LINQ returns them on carrier rows.
+const SAFETY_LABELS: Record<string, string> = { S: 'Satisfactory', C: 'Conditional', U: 'Unsatisfactory' };
+
+export function safetyLabel(code: string | null | undefined): string | null {
+  if (!code) return null;
+  return SAFETY_LABELS[code.toUpperCase()] ?? code;
+}
+
+// "Satisfactory" / "SATISFACTORY" / "S" → "S"; empty → null (no filter).
+export function safetyCode(value: string | null | undefined): string | null {
+  const v = (value || '').trim();
+  return v ? v.charAt(0).toUpperCase() : null;
+}
+
+// Filters LINQ can't be trusted with, applied to the rows we get back instead
+// (all verified live 2026-09-14):
+// - `safety_rating` is ignored by LINQ; rows carry the FMCSA code (S/C/U), and
+//   unrated carriers never match.
+// - `status` combined with `state` makes every cursor page after the first fail
+//   with a 500 after ~30s, so when both are set status is matched on the row
+//   (ACTIVE/INACTIVE). REVOKED has no row value and 500s in LINQ regardless.
+export function splitLocalFilters(filters: LinqSearchFilters): {
+  linq: LinqSearchFilters;
+  matches: (row: LinqCarrierRow) => boolean;
+  hasLocal: boolean;
+} {
+  const { safety_rating, ...linq } = filters;
+  const code = safetyCode(safety_rating);
+  const status = (filters.status || '').toUpperCase();
+  const localStatus = filters.state && (status === 'ACTIVE' || status === 'INACTIVE') ? status : null;
+  if (localStatus) delete linq.status;
+  const matches = (row: LinqCarrierRow) =>
+    (!code || (row.safety_rating || '').toUpperCase() === code) &&
+    (!localStatus || (row.status || '').toUpperCase() === localStatus);
+  return { linq, matches, hasLocal: !!(code || localStatus) };
+}
+
+export interface LinqFilteredSearchResult {
+  carriers: LinqCarrierRow[];
+  hasMore: boolean;
+  nextCursor: string | number | null;
+  partial: boolean; // a later LINQ page failed mid-walk; don't cache
+}
+
 export interface LinqInsurancePolicy {
   company?: string;
   policy_number?: string;
@@ -129,6 +173,47 @@ class MorProLinqService {
       method: 'POST',
       body: JSON.stringify(filters),
     })) as LinqSearchResult | null;
+  }
+
+  /**
+   * Search with the filters LINQ can't handle (see splitLocalFilters) applied on
+   * our side. Walks whole LINQ pages — never splitting one, so the returned
+   * cursor never skips rows — until `minRows` carriers match or `maxPages` pages
+   * are read. With nothing to filter locally this is exactly one LINQ call.
+   * Returns null only if the first call fails; a match-poor walk can come back
+   * with few rows and hasMore=true.
+   */
+  async searchCarriersFiltered(
+    filters: LinqSearchFilters,
+    opts: { minRows?: number; maxPages?: number } = {}
+  ): Promise<LinqFilteredSearchResult | null> {
+    const { linq, matches, hasLocal } = splitLocalFilters(filters);
+    const { cursor: startCursor, ...base } = linq;
+    const minRows = opts.minRows ?? filters.limit ?? 25;
+    const maxPages = hasLocal ? opts.maxPages ?? 5 : 1;
+    // Scan full 50-row pages when filtering locally so matches turn up in fewer calls.
+    const pageLimit = hasLocal ? 50 : filters.limit;
+
+    const carriers: LinqCarrierRow[] = [];
+    let cursor: string | number | null = startCursor ?? null;
+    let hasMore = true;
+    let partial = false;
+    for (let i = 0; i < maxPages && hasMore && carriers.length < minRows; i++) {
+      const page = await this.searchCarriers({
+        ...base,
+        ...(pageLimit != null ? { limit: pageLimit } : {}),
+        ...(cursor != null ? { cursor } : {}),
+      });
+      if (!page) {
+        if (i === 0) return null;
+        partial = true;
+        break;
+      }
+      carriers.push(...(page.carriers || []).filter(matches));
+      cursor = page.next_cursor ?? null;
+      hasMore = !!page.has_more && cursor != null;
+    }
+    return { carriers, hasMore, nextCursor: hasMore ? cursor : null, partial };
   }
 
   async getCarrier(dot: string): Promise<Record<string, unknown> | null> {

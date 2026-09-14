@@ -3,6 +3,8 @@ import { Op } from 'sequelize';
 import { AuthRequest } from '../types';
 import { LeadGeneratorSave, User, UserRole } from '../models';
 import morproLinqService, {
+  safetyLabel,
+  splitLocalFilters,
   type LinqSearchFilters,
   type LinqSearchResult,
 } from '../services/morproLinqService';
@@ -104,7 +106,7 @@ function toRow(c: any) {
     totalPowerUnits: c.power_units,
     totalDrivers: c.drivers || null,
     authorityStatus: c.status,
-    safetyRating: c.safety_rating,
+    safetyRating: safetyLabel(c.safety_rating),
   };
 }
 
@@ -123,7 +125,9 @@ export async function searchCarriers(req: AuthRequest, res: Response) {
     ...(cursor ? { cursor } : {}),
   };
 
-  const result = await morproLinqService.searchCarriers(filters);
+  // Safety rating, and status when combined with state, are matched on our side
+  // (LINQ ignores / 500s on them) — see splitLocalFilters.
+  const result = await morproLinqService.searchCarriersFiltered(filters);
   if (!result) {
     return res.status(502).json({ success: false, error: 'Carrier search unavailable' });
   }
@@ -131,7 +135,7 @@ export async function searchCarriers(req: AuthRequest, res: Response) {
   // LINQ /v1/carriers/search can return the same DOT multiple times (one row per
   // insurance policy / authority record), so collapse to one row per DOT here.
   const byDot = new Map<string, ReturnType<typeof toRow>>();
-  for (const c of result.carriers || []) {
+  for (const c of result.carriers) {
     const row = toRow(c);
     if (!byDot.has(row.dotNumber)) byDot.set(row.dotNumber, row);
   }
@@ -141,9 +145,9 @@ export async function searchCarriers(req: AuthRequest, res: Response) {
     success: true,
     data: {
       carriers,
-      limit: result.limit ?? limit,
-      hasMore: !!result.has_more,
-      nextCursor: result.has_more && result.next_cursor != null ? String(result.next_cursor) : null,
+      limit,
+      hasMore: result.hasMore,
+      nextCursor: result.nextCursor != null ? String(result.nextCursor) : null,
       tier,
     },
   });
@@ -306,7 +310,7 @@ function rowFromCarrier(c: any): Record<string, unknown> {
     total_power_units: c.power_units,
     total_drivers: c.drivers || '',
     authority_status: c.status,
-    safety_rating: c.safety_rating,
+    safety_rating: safetyLabel(c.safety_rating),
   };
 }
 
@@ -339,11 +343,10 @@ export async function exportCsv(req: AuthRequest, res: Response) {
     // Buyer: just the page they're viewing (25 rows). Fast enough to buffer, and
     // fetching first lets us still return a clean 502 if the search backend is down.
     const cursor = req.query.cursor ? String(req.query.cursor) : undefined;
-    const result = await morproLinqService.searchCarriers({
-      ...baseFilters,
-      limit: 25,
-      ...(cursor ? { cursor } : {}),
-    });
+    const result = await morproLinqService.searchCarriersFiltered(
+      { ...baseFilters, limit: 25, ...(cursor ? { cursor } : {}) },
+      { minRows: 25 }
+    );
     if (!result) {
       return res.status(502).json({ success: false, error: 'Carrier search unavailable' });
     }
@@ -377,7 +380,11 @@ export async function exportCsv(req: AuthRequest, res: Response) {
   //
   // LINQ rejects limit > 50 with a 400 and pages by cursor (it ignores `page`).
   const pageSize = 50;
-  const firstPage = await morproLinqService.searchCarriers({ ...baseFilters, limit: pageSize });
+  // Safety (and status alongside state) can't go to LINQ — match rows here, and
+  // cap the scan so a sparse match can't walk an entire state.
+  const { linq: brokerFilters, matches, hasLocal } = splitLocalFilters(baseFilters);
+  const maxScanPages = Math.ceil(maxRows / pageSize) * (hasLocal ? 4 : 1);
+  const firstPage = await morproLinqService.searchCarriers({ ...brokerFilters, limit: pageSize });
   if (!firstPage) {
     logger.warn('LG export: first search page failed', { filters: baseFilters });
     return res.status(502).json({ success: false, error: 'Carrier search unavailable' });
@@ -400,11 +407,13 @@ export async function exportCsv(req: AuthRequest, res: Response) {
   // Page 1 is already in hand from the probe above; later pages follow next_cursor.
   let result: LinqSearchResult | null = firstPage;
   let written = 0;
+  let pagesRead = 1;
   while (written < maxRows) {
     if (!result || (result.carriers || []).length === 0) break;
 
     const remaining = maxRows - written;
     const rows: Array<Record<string, unknown>> = (result.carriers || [])
+      .filter(matches)
       .slice(0, remaining)
       .map((c) => ({ ...rowFromCarrier(c), phone: '', email: '' }));
 
@@ -428,10 +437,10 @@ export async function exportCsv(req: AuthRequest, res: Response) {
     if (typeof (res as any).flush === 'function') (res as any).flush();
     written += rows.length;
 
-    if (!result.has_more || result.next_cursor == null) break;
+    if (!result.has_more || result.next_cursor == null || pagesRead++ >= maxScanPages) break;
     try {
       result = await morproLinqService.searchCarriers({
-        ...baseFilters,
+        ...brokerFilters,
         limit: pageSize,
         cursor: result.next_cursor,
       });

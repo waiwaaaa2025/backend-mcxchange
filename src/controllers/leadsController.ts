@@ -1,7 +1,12 @@
 import { Request, Response } from 'express';
 import { Op, WhereOptions, fn, col, literal } from 'sequelize';
 import { Lead, LeadStatus, User, UserRole, AgentAction } from '../models';
-import morproLinqService, { type LinqSearchFilters, type LinqCarrierRow } from '../services/morproLinqService';
+import morproLinqService, {
+  safetyLabel,
+  splitLocalFilters,
+  type LinqSearchFilters,
+  type LinqCarrierRow,
+} from '../services/morproLinqService';
 import { logLeadActivity, type LeadActivityKind } from '../services/leadActivity.service';
 import logger from '../utils/logger';
 
@@ -54,7 +59,7 @@ function rowToListShape(
     totalPowerUnits: c.power_units,
     totalDrivers: (c as any).drivers || null,
     authorityStatus: c.status,
-    safetyRating: c.safety_rating,
+    safetyRating: safetyLabel(c.safety_rating),
     insuranceCancellationDate: insuranceCancel,
   };
 }
@@ -86,14 +91,15 @@ export async function searchCarriers(req: Request, res: Response) {
     limit,
     ...(cursor ? { cursor } : {}),
   };
-  const result = await morproLinqService.searchCarriers(filters);
+  const result = await morproLinqService.searchCarriersFiltered(filters);
   if (!result) {
     return res.status(502).json({ success: false, error: 'LINQ search unavailable' });
   }
 
   // No per-row hydration — search response only (it already includes the
-  // insurance cancellation date). Sub-second regardless of filters.
-  const carriers = (result.carriers || []).map((c) => rowToListShape(c));
+  // insurance cancellation date). Safety rating, and status when combined with
+  // state, are matched on our side — see splitLocalFilters.
+  const carriers = result.carriers.map((c) => rowToListShape(c));
 
   // Echo back the active insurance horizon so the UI can show a banner like
   // "Showing carriers with insurance expiring by YYYY-MM-DD"
@@ -103,9 +109,9 @@ export async function searchCarriers(req: Request, res: Response) {
     success: true,
     data: {
       carriers,
-      limit: result.limit ?? limit,
-      hasMore: !!result.has_more,
-      nextCursor: result.has_more && result.next_cursor != null ? String(result.next_cursor) : null,
+      limit,
+      hasMore: result.hasMore,
+      nextCursor: result.nextCursor != null ? String(result.nextCursor) : null,
       insuranceHorizon,
     },
   });
@@ -143,10 +149,15 @@ export async function getCarrierDetail(req: Request, res: Response) {
 // Paginates LINQ search up to maxRows total, hydrates each row in parallel batches.
 export async function exportCarriersCsv(req: Request, res: Response) {
   const maxRows = Math.min(1000, Math.max(1, parseInt10(req.query.limit, 200)));
-  const baseFilters = buildLinqFilters(req.query);
+  // Safety (and status alongside state) can't go to LINQ — match rows here.
+  const { linq: baseFilters, matches, hasLocal } = splitLocalFilters(buildLinqFilters(req.query));
 
   const collected: Awaited<ReturnType<typeof hydrateForCsv>> = [];
   const pageSize = 50; // LINQ max
+  // Local filters can discard most of a page; cap the scan so a sparse match
+  // can't walk an entire state.
+  const maxScanPages = Math.ceil(maxRows / pageSize) * (hasLocal ? 4 : 1);
+  let pagesRead = 0;
   let cursor: string | number | undefined;
 
   while (collected.length < maxRows) {
@@ -159,12 +170,12 @@ export async function exportCarriersCsv(req: Request, res: Response) {
     if (!result || (result.carriers || []).length === 0) break;
 
     const remaining = maxRows - collected.length;
-    const slice = (result.carriers || []).slice(0, remaining);
+    const slice = (result.carriers || []).filter(matches).slice(0, remaining);
     const hydrated = await hydrateForCsv(slice);
     collected.push(...hydrated);
 
     // LINQ ignores `page`; follow next_cursor or we'd re-read page 1 forever.
-    if (!result.has_more || result.next_cursor == null) break;
+    if (!result.has_more || result.next_cursor == null || ++pagesRead >= maxScanPages) break;
     cursor = result.next_cursor;
   }
 
