@@ -14,8 +14,9 @@ export interface LinqSearchFilters {
   max_fleet_size?: number;
   cargo_type?: string;
   safety_rating?: 'Satisfactory' | 'Conditional' | 'Unsatisfactory' | string;
-  page?: number;
-  limit?: number;
+  page?: number;                     // IGNORED by LINQ (verified 2026-09-14) — page with `cursor`
+  limit?: number;                    // max 50, else 400
+  cursor?: string | number;          // previous response's next_cursor
 
   // Round 4 additions — see https://www.morprolinq.com/docs
   insurance_cancels_before?: string; // ISO date YYYY-MM-DD
@@ -34,13 +35,21 @@ export interface LinqCarrierRow {
   status: string | null;          // "ACTIVE" | "INACTIVE" | …
   power_units: number | null;
   drivers?: number | null;
-  safety_rating: string | null;
+  safety_rating: string | null;   // FMCSA code: "S" | "C" | "U" | null
+  city?: string | null;
+  add_date?: string | null;       // YYYYMMDD
+  insurance_summary?: {
+    earliest_cancellation_date: string | null;
+    total_active_coverage: number | null;
+    active_policies_count: number | null;
+  } | null;
 }
 
 export interface LinqSearchResult {
   page: number;
   limit: number;
   has_more: boolean;
+  next_cursor?: string | number | null;
   carriers: LinqCarrierRow[];
 }
 

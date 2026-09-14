@@ -43,9 +43,9 @@ export interface InsuranceLead {
 }
 
 export interface InsuranceLeadsResult {
-  total: number;      // rows seen through this page — LINQ gives no overall count
-  page: number;
+  total: number;      // rows in this response — LINQ gives no overall count
   limit: number;
   hasMore: boolean;
+  nextCursor: string | null;  // pass back as ?cursor= for the next page
   results: InsuranceLead[];
 }

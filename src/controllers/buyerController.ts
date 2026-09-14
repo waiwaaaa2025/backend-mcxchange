@@ -946,10 +946,11 @@ export const getInsuranceLeads = asyncHandler(async (req: AuthRequest, res: Resp
     minSafety: q.minSafety ? String(q.minSafety) : undefined,
     sort: q.sort ? String(q.sort) : 'daysUntilExpiry',
   };
-  const page = q.page ? parseIntParam(q.page as string) : 1;
+  // LINQ search pages by cursor (its `page` param is ignored)
+  const cursor = q.cursor ? String(q.cursor) : null;
   const limit = q.limit ? parseIntParam(q.limit as string) : 25;
 
-  const result = await carrierDataService.searchInsuranceLeads(filters, page, limit);
+  const result = await carrierDataService.searchInsuranceLeads(filters, cursor, limit);
 
   if (!result) {
     res.status(502).json({
