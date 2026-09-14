@@ -2,7 +2,10 @@ import { Response } from 'express';
 import { Op } from 'sequelize';
 import { AuthRequest } from '../types';
 import { LeadGeneratorSave, User, UserRole } from '../models';
-import morproLinqService, { type LinqSearchFilters } from '../services/morproLinqService';
+import morproLinqService, {
+  type LinqSearchFilters,
+  type LinqSearchResult,
+} from '../services/morproLinqService';
 import { getLeadGeneratorAccess } from '../services/entitlementService';
 import logger from '../utils/logger';
 
@@ -108,15 +111,16 @@ function toRow(c: any) {
 // GET /api/lead-generator/search
 export async function searchCarriers(req: AuthRequest, res: Response) {
   const tier = req.leadGenTier ?? 'BUYER';
-  const page = Math.max(1, parseInt10(req.query.page, 1));
-  const limit = Math.min(100, Math.max(1, parseInt10(req.query.limit, 25)));
+  // LINQ pages by cursor (it ignores `page`) and rejects limit > 50.
+  const cursor = req.query.cursor ? String(req.query.cursor) : undefined;
+  const limit = Math.min(50, Math.max(1, parseInt10(req.query.limit, 25)));
 
   const allowedRaw = filterByTier(req.query as Record<string, unknown>, tier);
   const userFilters = buildLinqFilters(allowedRaw);
   const filters: LinqSearchFilters = {
     ...(Object.keys(userFilters).length === 0 ? { status: 'ACTIVE' } : userFilters),
-    page,
     limit,
+    ...(cursor ? { cursor } : {}),
   };
 
   const result = await morproLinqService.searchCarriers(filters);
@@ -137,9 +141,9 @@ export async function searchCarriers(req: AuthRequest, res: Response) {
     success: true,
     data: {
       carriers,
-      page: result.page ?? page,
       limit: result.limit ?? limit,
       hasMore: !!result.has_more,
+      nextCursor: result.has_more && result.next_cursor != null ? String(result.next_cursor) : null,
       tier,
     },
   });
@@ -334,8 +338,12 @@ export async function exportCsv(req: AuthRequest, res: Response) {
   if (!isBrokerTier) {
     // Buyer: just the page they're viewing (25 rows). Fast enough to buffer, and
     // fetching first lets us still return a clean 502 if the search backend is down.
-    const page = Math.max(1, parseInt10(req.query.page, 1));
-    const result = await morproLinqService.searchCarriers({ ...baseFilters, page, limit: 25 });
+    const cursor = req.query.cursor ? String(req.query.cursor) : undefined;
+    const result = await morproLinqService.searchCarriers({
+      ...baseFilters,
+      limit: 25,
+      ...(cursor ? { cursor } : {}),
+    });
     if (!result) {
       return res.status(502).json({ success: false, error: 'Carrier search unavailable' });
     }
@@ -367,26 +375,11 @@ export async function exportCsv(req: AuthRequest, res: Response) {
   // the header row. Probing first means a broken/empty search returns a real 502
   // and the UI shows "CSV export failed" instead of downloading an empty sheet.
   //
-  // LINQ has rejected large page sizes in the past, so fall back to the same size
-  // the search UI uses (25) before giving up.
-  let pageSize = 100;
-  let firstPage = await morproLinqService.searchCarriers({
-    ...baseFilters,
-    page: 1,
-    limit: pageSize,
-  });
-  if (!firstPage || (firstPage.carriers || []).length === 0) {
-    logger.warn('LG export: first page empty at limit=100, retrying at 25', {
-      filters: baseFilters,
-    });
-    pageSize = 25;
-    firstPage = await morproLinqService.searchCarriers({
-      ...baseFilters,
-      page: 1,
-      limit: pageSize,
-    });
-  }
+  // LINQ rejects limit > 50 with a 400 and pages by cursor (it ignores `page`).
+  const pageSize = 50;
+  const firstPage = await morproLinqService.searchCarriers({ ...baseFilters, limit: pageSize });
   if (!firstPage) {
+    logger.warn('LG export: first search page failed', { filters: baseFilters });
     return res.status(502).json({ success: false, error: 'Carrier search unavailable' });
   }
   if ((firstPage.carriers || []).length === 0) {
@@ -404,18 +397,10 @@ export async function exportCsv(req: AuthRequest, res: Response) {
   // Force the compression middleware to flush so the header row hits the wire immediately.
   if (typeof (res as any).flush === 'function') (res as any).flush();
 
-  let page = 1;
+  // Page 1 is already in hand from the probe above; later pages follow next_cursor.
+  let result: LinqSearchResult | null = firstPage;
   let written = 0;
   while (written < maxRows) {
-    const filters: LinqSearchFilters = { ...baseFilters, page, limit: pageSize };
-    let result;
-    try {
-      // Page 1 is already in hand from the probe above — don't fetch it twice.
-      result = page === 1 ? firstPage : await morproLinqService.searchCarriers(filters);
-    } catch {
-      // Headers already sent — can't switch to an error status. Stop with a partial file.
-      break;
-    }
     if (!result || (result.carriers || []).length === 0) break;
 
     const remaining = maxRows - written;
@@ -443,8 +428,17 @@ export async function exportCsv(req: AuthRequest, res: Response) {
     if (typeof (res as any).flush === 'function') (res as any).flush();
     written += rows.length;
 
-    if (!result.has_more) break;
-    page++;
+    if (!result.has_more || result.next_cursor == null) break;
+    try {
+      result = await morproLinqService.searchCarriers({
+        ...baseFilters,
+        limit: pageSize,
+        cursor: result.next_cursor,
+      });
+    } catch {
+      // Headers already sent — can't switch to an error status. Stop with a partial file.
+      break;
+    }
   }
 
   res.end();

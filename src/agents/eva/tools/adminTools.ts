@@ -43,14 +43,16 @@ export function buildAdminTools(): ToolDef[] {
               insuranceExpiresWithinDays: { type: 'integer', description: 'e.g. 30 for next 30 days' },
               addedBefore: { type: 'string', description: 'YYYY-MM-DD' },
               addedAfter: { type: 'string', description: 'YYYY-MM-DD' },
-              limit: { type: 'integer', description: 'default 25, max 100' },
+              limit: { type: 'integer', description: 'default 25, max 50' },
+              cursor: { type: 'string', description: 'next_cursor from a previous call, to get the next page' },
             },
             additionalProperties: false,
           },
         },
       },
       handler: async (args: any) => {
-        const filters: LinqSearchFilters = { limit: Math.min(100, Math.max(1, args.limit || 25)) };
+        const filters: LinqSearchFilters = { limit: Math.min(50, Math.max(1, args.limit || 25)) };
+        if (args.cursor) filters.cursor = String(args.cursor);
         if (args.state) filters.state = String(args.state).toUpperCase();
         if (args.authorityStatus) filters.status = String(args.authorityStatus).toUpperCase();
         if (args.safetyRating) filters.safety_rating = args.safetyRating;
@@ -67,9 +69,9 @@ export function buildAdminTools(): ToolDef[] {
         const res = await morproLinqService.searchCarriers(filters);
         if (!res) return { error: 'LINQ search failed' };
         return {
-          page: res.page,
           limit: res.limit,
           has_more: res.has_more,
+          next_cursor: res.next_cursor ?? null,
           returned: res.carriers?.length || 0,
           carriers: res.carriers,
         };

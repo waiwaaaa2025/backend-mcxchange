@@ -40,8 +40,12 @@ function buildLinqFilters(q: Request['query']): LinqSearchFilters {
   return f;
 }
 
-// Map a LINQ search row to the list-page shape — no extra HTTP calls.
-function rowToListShape(c: LinqCarrierRow, insuranceCancel: string | null = null) {
+// Map a LINQ search row to the list-page shape — no extra HTTP calls. Search rows
+// carry insurance_summary, so the cancellation date comes along for free.
+function rowToListShape(
+  c: LinqCarrierRow,
+  insuranceCancel: string | null = c.insurance_summary?.earliest_cancellation_date ?? null
+) {
   return {
     dotNumber: String(c.dot_number),
     legalName: c.legal_name,
@@ -56,44 +60,39 @@ function rowToListShape(c: LinqCarrierRow, insuranceCancel: string | null = null
 }
 
 // Used by CSV export (small, bounded). NEVER use on the list page —
-// the per-row /insurance + /carrier hydration is the slowness culprit.
-// Fetches insurance (cancellation date) and carrier detail (phone/email) in
-// parallel per row; phone/email live on the LINQ detail record, not /search.
+// the per-row /carrier hydration is the slowness culprit. Phone/email live on
+// the LINQ detail record, not /search; the cancellation date is on the row.
 async function hydrateForCsv(rows: LinqCarrierRow[]) {
   return Promise.all(rows.map(async (c) => {
-    const dot = String(c.dot_number);
-    const [ins, carrier] = await Promise.all([
-      morproLinqService.getInsurance(dot),
-      morproLinqService.getCarrier(dot) as Promise<any>,
-    ]);
+    const carrier = (await morproLinqService.getCarrier(String(c.dot_number))) as any;
     return {
-      ...rowToListShape(c, ins?.summary?.earliest_cancellation_date || null),
+      ...rowToListShape(c),
       phone: carrier?.phone || carrier?.cell_phone || null,
       email: carrier?.email || null,
     };
   }));
 }
 
-// GET /api/admin/leads/carriers/search?state=TX&insuranceExpiresWithinDays=30&page=1&limit=25
+// GET /api/admin/leads/carriers/search?state=TX&insuranceExpiresWithinDays=30&cursor=…&limit=25
 export async function searchCarriers(req: Request, res: Response) {
-  const page = Math.max(1, parseInt10(req.query.page, 1));
-  const limit = Math.min(100, Math.max(1, parseInt10(req.query.limit, 25)));
+  // LINQ pages by cursor (it ignores `page`) and rejects limit > 50.
+  const cursor = req.query.cursor ? String(req.query.cursor) : undefined;
+  const limit = Math.min(50, Math.max(1, parseInt10(req.query.limit, 25)));
 
-  // LINQ requires at least one filter — default to status:ACTIVE for prospecting.
+  // Default to status:ACTIVE for prospecting when no filter is set.
   const userFilters = buildLinqFilters(req.query);
   const filters: LinqSearchFilters = {
     ...(Object.keys(userFilters).length === 0 ? { status: 'ACTIVE' } : userFilters),
-    page,
     limit,
+    ...(cursor ? { cursor } : {}),
   };
   const result = await morproLinqService.searchCarriers(filters);
   if (!result) {
     return res.status(502).json({ success: false, error: 'LINQ search unavailable' });
   }
 
-  // No per-row hydration — search response only. Sub-second regardless of filters.
-  // (LINQ team is adding insurance_summary inline to /search; until then, exact
-  // cancel dates live in the detail drawer when the user clicks a carrier.)
+  // No per-row hydration — search response only (it already includes the
+  // insurance cancellation date). Sub-second regardless of filters.
   const carriers = (result.carriers || []).map((c) => rowToListShape(c));
 
   // Echo back the active insurance horizon so the UI can show a banner like
@@ -104,9 +103,9 @@ export async function searchCarriers(req: Request, res: Response) {
     success: true,
     data: {
       carriers,
-      page: result.page ?? page,
       limit: result.limit ?? limit,
       hasMore: !!result.has_more,
+      nextCursor: result.has_more && result.next_cursor != null ? String(result.next_cursor) : null,
       insuranceHorizon,
     },
   });
@@ -147,11 +146,15 @@ export async function exportCarriersCsv(req: Request, res: Response) {
   const baseFilters = buildLinqFilters(req.query);
 
   const collected: Awaited<ReturnType<typeof hydrateForCsv>> = [];
-  let page = 1;
-  const pageSize = 50;
+  const pageSize = 50; // LINQ max
+  let cursor: string | number | undefined;
 
   while (collected.length < maxRows) {
-    const filters: LinqSearchFilters = { ...baseFilters, page, limit: pageSize };
+    const filters: LinqSearchFilters = {
+      ...baseFilters,
+      limit: pageSize,
+      ...(cursor != null ? { cursor } : {}),
+    };
     const result = await morproLinqService.searchCarriers(filters);
     if (!result || (result.carriers || []).length === 0) break;
 
@@ -160,8 +163,9 @@ export async function exportCarriersCsv(req: Request, res: Response) {
     const hydrated = await hydrateForCsv(slice);
     collected.push(...hydrated);
 
-    if (!result.has_more) break;
-    page++;
+    // LINQ ignores `page`; follow next_cursor or we'd re-read page 1 forever.
+    if (!result.has_more || result.next_cursor == null) break;
+    cursor = result.next_cursor;
   }
 
   const csvHeaders = [
