@@ -18,7 +18,7 @@ export interface MorProCarrierReport {
   compliance: any;    // null placeholders (future)
 }
 
-// Pending Insurance Leads — cross-carrier search (MorPro /api/carriers/search)
+// Pending Insurance Leads — cross-carrier search (LINQ POST /v1/carriers/search)
 export interface InsuranceLeadFilters {
   insuranceStatus?: 'pending' | 'expiring';
   expiringWithinDays?: number;
@@ -43,8 +43,9 @@ export interface InsuranceLead {
 }
 
 export interface InsuranceLeadsResult {
-  total: number;
+  total: number;      // rows seen through this page — LINQ gives no overall count
   page: number;
   limit: number;
+  hasMore: boolean;
   results: InsuranceLead[];
 }

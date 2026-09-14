@@ -1,10 +1,12 @@
 import { config } from '../config';
 import {
   MorProCarrierReport,
+  InsuranceLead,
   InsuranceLeadFilters,
   InsuranceLeadsResult,
 } from '../types/carrierData';
 import cacheService from './cacheService';
+import morproLinqService, { type LinqSearchFilters } from './morproLinqService';
 import logger from '../utils/logger';
 import { AppError, TooManyRequestsError } from '../middleware/errorHandler';
 
@@ -31,6 +33,16 @@ const legacyUpstream: CarrierUpstream = {
     return key ? { 'X-API-Key': key } : {};
   },
 };
+
+function isoDateOffset(days: number): string {
+  return new Date(Date.now() + days * 86_400_000).toISOString().slice(0, 10);
+}
+
+// Whole days from today (UTC) to a YYYY-MM-DD date; negative once it has passed.
+function daysUntil(isoDate: string): number {
+  const today = Date.parse(isoDateOffset(0));
+  return Math.round((Date.parse(isoDate.slice(0, 10)) - today) / 86_400_000);
+}
 
 // MorPro LINQ (Manifest) — same endpoints under an /api/v1 prefix, authenticated
 // with X-Manifest-Key. Subject to a monthly call quota.
@@ -316,53 +328,94 @@ class CarrierDataService {
 
   /**
    * Cross-carrier insurance lead search.
-   * Proxies the MorPro LINQ /api/v1/carriers/search endpoint (which runs the same
-   * pending/expiring derivation we apply per-DOT, but across all carriers).
-   * Cached in Redis for 1h keyed by the serialized filter set.
+   * LINQ `POST /v1/carriers/search` finds active carriers whose insurance has a
+   * scheduled cancellation inside the window; search rows carry no insurance
+   * fields, so each row is hydrated from `/v1/carriers/:dot/insurance` for the
+   * cancellation date + MC docket. LINQ returns `has_more` but no total count.
+   * Cached in Redis for 1h keyed by the LINQ filter set (dates roll daily).
    */
   async searchInsuranceLeads(
     filters: InsuranceLeadFilters,
     page = 1,
     limit = 25
   ): Promise<InsuranceLeadsResult | null> {
-    const safeLimit = Math.min(Math.max(limit, 1), 100);
+    // LINQ caps search pages at 50
+    const safeLimit = Math.min(Math.max(limit, 1), 50);
     const safePage = Math.max(page, 1);
+    const windowDays = Math.min(Math.max(filters.expiringWithinDays ?? 30, 1), 90);
 
-    const params = new URLSearchParams();
-    if (filters.insuranceStatus) params.set('insuranceStatus', filters.insuranceStatus);
-    if (filters.expiringWithinDays != null)
-      params.set('expiringWithinDays', String(filters.expiringWithinDays));
-    if (filters.state) params.set('state', filters.state);
-    if (filters.minUnits != null) params.set('minUnits', String(filters.minUnits));
-    if (filters.maxUnits != null) params.set('maxUnits', String(filters.maxUnits));
-    if (filters.minSafety) params.set('minSafety', filters.minSafety);
-    if (filters.sort) params.set('sort', filters.sort);
-    params.set('page', String(safePage));
-    params.set('limit', String(safeLimit));
+    // FMCSA insurance has no expiry date — a lapse is always a filed cancellation
+    // with a future effective date, so "pending" and "expiring" are the same query.
+    const linqFilters: LinqSearchFilters = {
+      status: 'active',
+      has_active_insurance: true,
+      insurance_cancels_after: isoDateOffset(0),
+      insurance_cancels_before: isoDateOffset(windowDays),
+      page: safePage,
+      limit: safeLimit,
+    };
+    if (filters.state) linqFilters.state = filters.state.toUpperCase();
+    if (filters.minUnits != null) linqFilters.min_fleet_size = filters.minUnits;
+    if (filters.maxUnits != null) linqFilters.max_fleet_size = filters.maxUnits;
+    // LINQ expects "Satisfactory" / "Conditional" / "Unsatisfactory"
+    if (filters.minSafety) {
+      const s = filters.minSafety.toLowerCase();
+      linqFilters.safety_rating = s.charAt(0).toUpperCase() + s.slice(1);
+    }
 
-    const query = params.toString();
-    const cacheKey = `insurance_leads:${query}`;
+    const cacheKey = `insurance_leads:v2:${JSON.stringify(linqFilters)}`;
 
     try {
       const cached = await cacheService.get<InsuranceLeadsResult>(cacheKey);
       if (cached) {
-        logger.info(`Insurance leads cache HIT (${query})`);
+        logger.info(`Insurance leads cache HIT (${cacheKey})`);
         return cached;
       }
 
-      const url = `${linqUpstream.baseUrl}${linqUpstream.prefix}/carriers/search?${query}`;
-      const res = await fetchWithTimeout(url, linqUpstream.headers());
-      if (!res.ok) {
-        logger.warn(`MorPro insurance lead search failed: ${res.status} (${query})`);
+      const search = await morproLinqService.searchCarriers(linqFilters);
+      if (!search) {
+        logger.warn(`LINQ insurance lead search failed (${cacheKey})`);
         return null;
       }
 
-      const data = (await res.json()) as InsuranceLeadsResult;
-      // 1h TTL — insurance status changes daily at most
+      const rows = search.carriers || [];
+      const results = await Promise.all(
+        rows.map(async (row): Promise<InsuranceLead> => {
+          const dot = String(row.dot_number);
+          const insurance = await morproLinqService.getInsurance(dot);
+          const cancelDate = insurance?.summary?.earliest_cancellation_date || null;
+          const policies = insurance?.active_policies || [];
+          const cancelling = policies.find((p) => p.cancellation_date === cancelDate) || policies[0];
+          return {
+            dotNumber: dot,
+            mcNumber: cancelling?.docket_number || null,
+            legalName: row.legal_name || row.dba_name || `DOT ${dot}`,
+            state: row.state,
+            powerUnits: row.power_units,
+            safetyRating: row.safety_rating,
+            insuranceStatus: 'pending',
+            insuranceExpiryDate: cancelDate,
+            daysUntilExpiry: cancelDate ? daysUntil(cancelDate) : null,
+            pendingReason: cancelDate ? 'CANCELLATION_SCHEDULED' : null,
+          };
+        })
+      );
+
+      // Soonest cancellation first (within the page — LINQ has no sort param)
+      results.sort((a, b) => (a.daysUntilExpiry ?? Infinity) - (b.daysUntilExpiry ?? Infinity));
+
+      const data: InsuranceLeadsResult = {
+        total: (safePage - 1) * safeLimit + results.length,
+        page: search.page ?? safePage,
+        limit: search.limit ?? safeLimit,
+        hasMore: !!search.has_more,
+        results,
+      };
+      // 1h TTL — insurance filings change daily at most
       await cacheService.set(cacheKey, data, 3600);
       return data;
     } catch (error) {
-      logger.error('Insurance lead search error', error as Error, { query });
+      logger.error('Insurance lead search error', error as Error, { cacheKey });
       return null;
     }
   }

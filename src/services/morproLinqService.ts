@@ -53,6 +53,8 @@ export interface LinqInsurancePolicy {
   effective_date?: string;
   cancellation_date?: string | null;
   coverage_amount?: number;
+  is_active?: boolean;
+  days_to_cancellation?: number | null;
 }
 
 export interface LinqInsuranceSummary {
