@@ -1951,6 +1951,92 @@ class StripeService {
   }
 
   // ============================================
+  // Identity Verification
+  // ============================================
+
+  /**
+   * Create a Stripe Identity verification session
+   */
+  async createVerificationSession(params: {
+    userId: string;
+    returnUrl: string;
+  }): Promise<{
+    success: boolean;
+    sessionId?: string;
+    url?: string;
+    error?: string;
+  }> {
+    if (!stripe) {
+      return { success: false, error: 'Payment service not available' };
+    }
+
+    try {
+      const session = await (stripe as any).identity.verificationSessions.create({
+        type: 'document',
+        metadata: {
+          userId: params.userId,
+          platform: 'mc-exchange',
+        },
+        options: {
+          document: {
+            require_matching_selfie: true,
+          },
+        },
+        return_url: params.returnUrl,
+      });
+
+      logger.info('Identity verification session created', {
+        sessionId: session.id,
+        userId: params.userId,
+      });
+
+      return {
+        success: true,
+        sessionId: session.id,
+        url: session.url,
+      };
+    } catch (error) {
+      logError('Failed to create identity verification session', error as Error, {
+        userId: params.userId,
+      });
+      return {
+        success: false,
+        error: (error as Error).message,
+      };
+    }
+  }
+
+  /**
+   * Retrieve a Stripe Identity verification session
+   */
+  async getVerificationSession(sessionId: string): Promise<{
+    success: boolean;
+    status?: string;
+    lastError?: any;
+    error?: string;
+  }> {
+    if (!stripe) {
+      return { success: false, error: 'Payment service not available' };
+    }
+
+    try {
+      const session = await (stripe as any).identity.verificationSessions.retrieve(sessionId);
+
+      return {
+        success: true,
+        status: session.status,
+        lastError: session.last_error,
+      };
+    } catch (error) {
+      logError('Failed to retrieve verification session', error as Error, { sessionId });
+      return {
+        success: false,
+        error: (error as Error).message,
+      };
+    }
+  }
+
+  // ============================================
   // Utility Methods
   // ============================================
 

@@ -29,7 +29,7 @@ import {
   adminConfirmEscrow,
   confirmEscrowValidation,
 } from '../controllers/transactionController';
-import { authenticate, adminOnly } from '../middleware/auth';
+import { authenticate, adminOnly, requireIdentityVerification } from '../middleware/auth';
 import validate from '../middleware/validate';
 
 const router = Router();
@@ -46,14 +46,16 @@ router.post('/admin/create', adminOnly, validate(adminCreateTransactionValidatio
 router.get('/', getMyTransactions);
 router.get('/:id', getTransaction);
 
-// Buyer actions
-router.post('/:id/buyer/accept-terms', buyerAcceptTerms);
-router.post('/:id/buyer/approve', buyerApprove);
-router.post('/:id/deposit', validate(paymentValidation), payDeposit);
-router.post('/:id/deposit-checkout', createDepositCheckout);
+// Buyer actions — buying the business (after the seller accepted the offer)
+// requires a verified identity. These, plus the offer deposit checkout, are the
+// only places identity verification is enforced.
+router.post('/:id/buyer/accept-terms', requireIdentityVerification, buyerAcceptTerms);
+router.post('/:id/buyer/approve', requireIdentityVerification, buyerApprove);
+router.post('/:id/deposit', requireIdentityVerification, validate(paymentValidation), payDeposit);
+router.post('/:id/deposit-checkout', requireIdentityVerification, createDepositCheckout);
 router.post('/:id/verify-deposit-status', verifyDepositStatus);
-router.post('/:id/final-payment', validate(paymentValidation), payFinal);
-router.post('/:id/final-payment-checkout', createFinalPaymentCheckout);
+router.post('/:id/final-payment', requireIdentityVerification, validate(paymentValidation), payFinal);
+router.post('/:id/final-payment-checkout', requireIdentityVerification, createFinalPaymentCheckout);
 
 // Seller actions
 router.post('/:id/seller/accept-terms', sellerAcceptTerms);

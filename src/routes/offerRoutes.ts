@@ -14,7 +14,7 @@ import {
   createOfferValidation,
   counterOfferValidation,
 } from '../controllers/offerController';
-import { authenticate, sellerOnly, buyerOnly, adminOnly } from '../middleware/auth';
+import { authenticate, sellerOnly, buyerOnly, adminOnly, requireIdentityVerification } from '../middleware/auth';
 import validate from '../middleware/validate';
 
 const router = Router();
@@ -27,7 +27,9 @@ router.post('/', buyerOnly, validate(createOfferValidation), createOffer);
 router.get('/my-offers', buyerOnly, getBuyerOffers);
 router.post('/:id/accept-counter', buyerOnly, acceptCounterOffer);
 router.post('/:id/withdraw', buyerOnly, withdrawOffer);
-router.post('/:id/deposit-checkout', buyerOnly, createDepositCheckout);
+// Paying the deposit on an accepted offer is where the buyer starts buying the
+// business, so this is where identity verification (Stripe Identity) is required.
+router.post('/:id/deposit-checkout', buyerOnly, requireIdentityVerification, createDepositCheckout);
 
 // Seller routes
 router.get('/received', sellerOnly, getSellerOffers);
