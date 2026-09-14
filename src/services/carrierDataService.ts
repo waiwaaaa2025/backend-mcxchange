@@ -76,6 +76,19 @@ async function readUpstreamCode(res: Response): Promise<string | undefined> {
   }
 }
 
+// LINQ answers an unknown DOT with HTTP 200 + `{"error":"Carrier not found"}`
+// rather than a 404, so a successful status alone doesn't mean carrier data.
+function isErrorBody(body: any): boolean {
+  return (
+    !!body &&
+    typeof body === 'object' &&
+    !Array.isArray(body) &&
+    typeof body.error === 'string' &&
+    body.dot_number == null &&
+    body.legal_name == null
+  );
+}
+
 type ReportFetch =
   | { kind: 'ok'; report: MorProCarrierReport }
   | { kind: 'notFound' }
@@ -142,7 +155,7 @@ class CarrierDataService {
     }
 
     const carrier: any = await baseRes.json().catch(() => null);
-    if (!carrier) return { kind: 'notFound' };
+    if (!carrier || isErrorBody(carrier)) return { kind: 'notFound' };
 
     // Base carrier exists — fetch the rest in parallel, each capped by a short
     // timeout and failing to null so slow enrichment endpoints can't stall it.
@@ -196,7 +209,8 @@ class CarrierDataService {
     try {
       const res = await fetchWithTimeout(`${baseUrl}/${endpoint}`, headers, timeoutMs);
       if (!res.ok) return null;
-      return await res.json();
+      const body = await res.json();
+      return isErrorBody(body) ? null : body;
     } catch {
       return null;
     }
@@ -233,7 +247,7 @@ class CarrierDataService {
     }
 
     const raw: any = await res.json().catch(() => null);
-    if (!raw || !raw.carrier) return { kind: 'notFound' };
+    if (!raw || !raw.carrier || isErrorBody(raw) || isErrorBody(raw.carrier)) return { kind: 'notFound' };
 
     return {
       kind: 'ok',
@@ -267,7 +281,11 @@ class CarrierDataService {
   async getFullReport(dotNumber: string): Promise<MorProCarrierReport | null> {
     // 1. Check Redis cache
     const cached = await cacheService.getCachedCarrierReport<MorProCarrierReport>(dotNumber);
-    if (cached) {
+    if (cached && isErrorBody(cached.carrier)) {
+      // Poisoned entry written before not-found bodies were rejected — drop it.
+      logger.warn(`Discarding cached not-found report for DOT ${dotNumber}`);
+      await cacheService.invalidateCarrierReport(dotNumber);
+    } else if (cached) {
       logger.info(`Carrier report cache HIT for DOT ${dotNumber} — serving instantly`);
       return cached;
     }

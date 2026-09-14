@@ -95,7 +95,13 @@ async function fetchJson(path: string, init?: RequestInit, timeoutMs = 15000): P
       logger.warn(`LINQ ${init?.method || 'GET'} ${path} → ${res.status}: ${body.slice(0, 200)}`);
       return null;
     }
-    return await res.json();
+    const body: any = await res.json();
+    // LINQ answers an unknown DOT with 200 + {"error":"Carrier not found"}.
+    if (body && typeof body === 'object' && typeof body.error === 'string' && body.dot_number == null) {
+      logger.warn(`LINQ ${init?.method || 'GET'} ${path} → 200 with error: ${body.error}`);
+      return null;
+    }
+    return body;
   } catch (err) {
     logger.warn(`LINQ ${init?.method || 'GET'} ${path} failed`, { error: (err as Error).message });
     return null;

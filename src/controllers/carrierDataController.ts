@@ -29,5 +29,9 @@ export const refreshCarrierReport = asyncHandler(async (req: Request, res: Respo
   await cacheService.invalidateCarrierReport(dotNumber);
   const report = await carrierDataService.getFullReport(dotNumber);
 
+  if (!report) {
+    return res.status(404).json({ success: false, error: 'Carrier data not found' });
+  }
+
   res.json({ success: true, data: report, cached: false });
 });
