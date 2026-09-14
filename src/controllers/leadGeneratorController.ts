@@ -3,8 +3,6 @@ import { Op } from 'sequelize';
 import { AuthRequest } from '../types';
 import { LeadGeneratorSave, User, UserRole } from '../models';
 import morproLinqService, {
-  carrierCargo,
-  cargoMatches,
   safetyLabel,
   splitLocalFilters,
   type LinqSearchFilters,
@@ -52,7 +50,6 @@ const BROKER_FILTER_KEYS = new Set([
   ...BUYER_FILTER_KEYS,
   'minFleet',
   'maxFleet',
-  'cargoType',
   'addedBefore',
   'addedAfter',
 ]);
@@ -86,7 +83,6 @@ function buildLinqFilters(q: Record<string, unknown>): LinqSearchFilters {
   if (q.name) f.name_contains = String(q.name);
   if (q.minFleet) f.min_fleet_size = parseInt10(q.minFleet, 0);
   if (q.maxFleet) f.max_fleet_size = parseInt10(q.maxFleet, Number.MAX_SAFE_INTEGER);
-  if (q.cargoType) f.cargo_type = String(q.cargoType);
   if (q.addedBefore) f.added_before = String(q.addedBefore);
   if (q.addedAfter) f.added_after = String(q.addedAfter);
   if (q.insuranceExpiresWithinDays) {
@@ -127,8 +123,8 @@ export async function searchCarriers(req: AuthRequest, res: Response) {
     ...(cursor ? { cursor } : {}),
   };
 
-  // Safety rating, cargo type, and status when combined with state, are matched
-  // on our side (LINQ ignores / 500s on them) — see splitLocalFilters.
+  // Safety rating, and status when combined with state, are matched on our side
+  // (LINQ ignores / 500s on them) — see splitLocalFilters.
   const result = await morproLinqService.searchCarriersFiltered(filters);
   if (!result) {
     return res.status(502).json({ success: false, error: 'Carrier search unavailable' });
@@ -382,9 +378,9 @@ export async function exportCsv(req: AuthRequest, res: Response) {
   //
   // LINQ rejects limit > 50 with a 400 and pages by cursor (it ignores `page`).
   const pageSize = 50;
-  // Safety, cargo (and status alongside state) can't go to LINQ — match rows
-  // here, and cap the scan so a sparse match can't walk an entire state.
-  const { linq: brokerFilters, matches, cargo, hasLocal } = splitLocalFilters(baseFilters);
+  // Safety (and status alongside state) can't go to LINQ — match rows here, and
+  // cap the scan so a sparse match can't walk an entire state.
+  const { linq: brokerFilters, matches, hasLocal } = splitLocalFilters(baseFilters);
   const maxScanPages = Math.ceil(maxRows / pageSize) * (hasLocal ? 4 : 1);
   const firstPage = await morproLinqService.searchCarriers({ ...brokerFilters, limit: pageSize });
   if (!firstPage) {
@@ -414,30 +410,27 @@ export async function exportCsv(req: AuthRequest, res: Response) {
     if (!result || (result.carriers || []).length === 0) break;
 
     const remaining = maxRows - written;
-    const filtered = (result.carriers || []).filter(matches);
-    // Without a cargo filter every candidate is written, so don't fetch past maxRows.
-    const candidates = cargo ? filtered : filtered.slice(0, remaining);
+    const rows: Array<Record<string, unknown>> = (result.carriers || [])
+      .filter(matches)
+      .slice(0, remaining)
+      .map((c) => ({ ...rowFromCarrier(c), phone: '', email: '' }));
 
-    // One per-carrier LINQ detail call gives phone + email and, when filtering
-    // by cargo, what the carrier hauls.
-    const details = await mapLimit(candidates, 12, async (c) => {
+    // Enrich this page's rows with phone + email from the per-carrier LINQ detail.
+    const contacts = await mapLimit(rows, 12, async (row) => {
       try {
-        return (await morproLinqService.getCarrier(String(c.dot_number))) as any;
+        const d = (await morproLinqService.getCarrier(String(row.dot_number))) as any;
+        return { phone: d?.phone || d?.cell_phone || '', email: d?.email || '' };
       } catch {
-        return null;
+        return { phone: '', email: '' };
       }
     });
 
-    const rows: Array<Record<string, unknown>> = [];
-    candidates.forEach((c, idx) => {
-      const d = details[idx];
-      if (cargo && !(d && cargoMatches(carrierCargo(d), cargo))) return;
-      rows.push({ ...rowFromCarrier(c), phone: d?.phone || d?.cell_phone || '', email: d?.email || '' });
-    });
-    rows.splice(remaining);
-
     let chunk = '';
-    for (const row of rows) chunk += toLine(row) + '\n';
+    rows.forEach((row, idx) => {
+      row.phone = contacts[idx].phone;
+      row.email = contacts[idx].email;
+      chunk += toLine(row) + '\n';
+    });
     res.write(chunk);
     if (typeof (res as any).flush === 'function') (res as any).flush();
     written += rows.length;

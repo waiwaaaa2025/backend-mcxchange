@@ -1,6 +1,5 @@
 import { config } from '../config';
 import logger from '../utils/logger';
-import cacheService from './cacheService';
 
 // LINQ docs: https://www.morprolinq.com/docs
 // Auth: X-Manifest-Key header
@@ -13,7 +12,6 @@ export interface LinqSearchFilters {
   status?: 'ACTIVE' | 'INACTIVE' | 'REVOKED' | string;
   min_fleet_size?: number;
   max_fleet_size?: number;
-  cargo_type?: string;               // IGNORED by LINQ — matched locally (splitLocalFilters)
   safety_rating?: 'Satisfactory' | 'Conditional' | 'Unsatisfactory' | string; // IGNORED — matched locally
   page?: number;                     // IGNORED by LINQ (verified 2026-09-14) — page with `cursor`
   limit?: number;                    // max 50, else 400
@@ -68,54 +66,6 @@ export function safetyCode(value: string | null | undefined): string | null {
   return v ? v.charAt(0).toUpperCase() : null;
 }
 
-// The 30 FMCSA cargo classifications, spelled exactly as LINQ returns them in
-// `cargo_carried` (collected live 2026-09-14).
-export const CARGO_TYPES = [
-  'General Freight', 'Household Goods', 'Metal/Sheets/Coils', 'Motor Vehicles', 'Drive/Tow Away',
-  'Logs/Poles/Lumber', 'Building Materials', 'Mobile Homes', 'Machinery/Large Objects',
-  'Fresh/Frozen Foods', 'Liquids/Gases', 'Intermodal Containers', 'Passengers', 'Oilfield Equipment',
-  'Livestock', 'Grain/Feed/Hay', 'Coal/Coke', 'Meat', 'Garbage/Refuse', 'US Mail', 'Chemicals',
-  'Commodities/Dry Bulk', 'Beverages', 'Paper Products', 'Utilities', 'Farm Supplies', 'Construction',
-  'Water Well', 'Produce', 'Other',
-] as const;
-
-// Common wording that doesn't appear in the FMCSA labels.
-const CARGO_ALIASES: Record<string, string> = {
-  refrigerated: 'fresh/frozen foods',
-  'refrigerated food': 'fresh/frozen foods',
-  reefer: 'fresh/frozen foods',
-};
-
-// Everything a carrier profile says it hauls: the FMCSA labels plus the
-// free-text description behind "Other" (e.g. "DAIRY", "SAND, GRAVEL, DIRT").
-export function carrierCargo(profile: any): string[] {
-  const labels: string[] = Array.isArray(profile?.cargo_carried) ? profile.cargo_carried : [];
-  const other = profile?.crgo_cargoothr_desc;
-  return other ? [...labels, String(other)] : labels;
-}
-
-// Case-insensitive substring match, so "frozen" finds Fresh/Frozen Foods and
-// "gravel" finds an "Other: SAND, GRAVEL, DIRT" carrier.
-export function cargoMatches(cargo: string[], query: string): boolean {
-  const q = query.trim().toLowerCase();
-  if (!q) return true;
-  const needle = CARGO_ALIASES[q] ?? q;
-  return cargo.some((c) => c.toLowerCase().includes(needle));
-}
-
-async function mapLimit<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
-  const results: R[] = new Array(items.length);
-  let i = 0;
-  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
-    while (i < items.length) {
-      const cur = i++;
-      results[cur] = await fn(items[cur]);
-    }
-  });
-  await Promise.all(workers);
-  return results;
-}
-
 // Filters LINQ can't be trusted with, applied to the rows we get back instead
 // (all verified live 2026-09-14):
 // - `safety_rating` is ignored by LINQ; rows carry the FMCSA code (S/C/U), and
@@ -123,25 +73,20 @@ async function mapLimit<T, R>(items: T[], limit: number, fn: (item: T) => Promis
 // - `status` combined with `state` makes every cursor page after the first fail
 //   with a 500 after ~30s, so when both are set status is matched on the row
 //   (ACTIVE/INACTIVE). REVOKED has no row value and 500s in LINQ regardless.
-// - `cargo_type` is ignored by LINQ and search rows carry no cargo, so it needs a
-//   per-carrier lookup: `cargo` is returned for the caller to apply with
-//   filterByCargo (or cargoMatches on a profile it already fetched).
 export function splitLocalFilters(filters: LinqSearchFilters): {
   linq: LinqSearchFilters;
   matches: (row: LinqCarrierRow) => boolean;
-  cargo: string | null;
   hasLocal: boolean;
 } {
-  const { safety_rating, cargo_type, ...linq } = filters;
+  const { safety_rating, ...linq } = filters;
   const code = safetyCode(safety_rating);
-  const cargo = cargo_type?.trim() || null;
   const status = (filters.status || '').toUpperCase();
   const localStatus = filters.state && (status === 'ACTIVE' || status === 'INACTIVE') ? status : null;
   if (localStatus) delete linq.status;
   const matches = (row: LinqCarrierRow) =>
     (!code || (row.safety_rating || '').toUpperCase() === code) &&
     (!localStatus || (row.status || '').toUpperCase() === localStatus);
-  return { linq, matches, cargo, hasLocal: !!(code || localStatus || cargo) };
+  return { linq, matches, hasLocal: !!(code || localStatus) };
 }
 
 export interface LinqFilteredSearchResult {
@@ -241,11 +186,10 @@ class MorProLinqService {
     filters: LinqSearchFilters,
     opts: { minRows?: number; maxPages?: number } = {}
   ): Promise<LinqFilteredSearchResult | null> {
-    const { linq, matches, cargo, hasLocal } = splitLocalFilters(filters);
+    const { linq, matches, hasLocal } = splitLocalFilters(filters);
     const { cursor: startCursor, ...base } = linq;
     const minRows = opts.minRows ?? filters.limit ?? 25;
-    // A cargo filter costs one profile lookup per row, so it scans fewer pages.
-    const maxPages = hasLocal ? opts.maxPages ?? (cargo ? 3 : 5) : 1;
+    const maxPages = hasLocal ? opts.maxPages ?? 5 : 1;
     // Scan full 50-row pages when filtering locally so matches turn up in fewer calls.
     const pageLimit = hasLocal ? 50 : filters.limit;
 
@@ -264,34 +208,11 @@ class MorProLinqService {
         partial = true;
         break;
       }
-      const rows = (page.carriers || []).filter(matches);
-      carriers.push(...(cargo ? await this.filterByCargo(rows, cargo) : rows));
+      carriers.push(...(page.carriers || []).filter(matches));
       cursor = page.next_cursor ?? null;
       hasMore = !!page.has_more && cursor != null;
     }
     return { carriers, hasMore, nextCursor: hasMore ? cursor : null, partial };
-  }
-
-  /**
-   * What a carrier hauls (see carrierCargo), cached 7 days — cargo
-   * classifications only change when the carrier refiles its MCS-150. Returns
-   * null when the lookup fails, which is not cached.
-   */
-  async getCargo(dot: string): Promise<string[] | null> {
-    const key = `linq_cargo:v1:${dot}`;
-    const cached = await cacheService.get<string[]>(key);
-    if (cached) return cached;
-    const profile = await this.getCarrier(dot);
-    if (!profile) return null;
-    const cargo = carrierCargo(profile);
-    await cacheService.set(key, cargo, 7 * 24 * 3600);
-    return cargo;
-  }
-
-  // Keep rows whose carrier hauls `query`; rows whose lookup fails are dropped.
-  async filterByCargo<T extends { dot_number: number | string }>(rows: T[], query: string): Promise<T[]> {
-    const cargo = await mapLimit(rows, 12, (r) => this.getCargo(String(r.dot_number)));
-    return rows.filter((_, i) => cargo[i] != null && cargoMatches(cargo[i] as string[], query));
   }
 
   async getCarrier(dot: string): Promise<Record<string, unknown> | null> {

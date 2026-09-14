@@ -133,7 +133,7 @@ const DEFAULT_PRICING: PricingConfig = {
       stripePriceIdYearly: '',
       features: [
         'Everything in the Buyer tier',
-        'Advanced filters: power-units range, authority age, cargo type, multi-state',
+        'Advanced filters: power-units range, authority age, multi-state',
         'Bulk select and CSV download of every matching carrier',
         'Best for brokers, marketers, and service sellers needing leads in volume',
       ],
