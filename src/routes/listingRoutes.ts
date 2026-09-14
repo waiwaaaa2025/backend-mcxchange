@@ -14,7 +14,7 @@ import {
   getUnlockedListings,
   createListingValidation,
 } from '../controllers/listingController';
-import { authenticate, optionalAuth, sellerOnly, buyerOnly, requireEnterpriseSubscription, requireIdentityVerificationOrActiveSubscription, requireActiveBilling } from '../middleware/auth';
+import { authenticate, optionalAuth, sellerOnly, buyerOnly, requireEnterpriseSubscription, requireActiveBilling } from '../middleware/auth';
 import validate from '../middleware/validate';
 
 const router = Router();
@@ -44,9 +44,6 @@ router.post('/:id/save', authenticate, saveListing);
 router.delete('/:id/save', authenticate, unsaveListing);
 
 // Unlock listing (buyer uses credit) — blocked while billing is delinquent.
-// Paying subscribers unlock without identity verification: they've already
-// cleared a Stripe payment, and a dropped verification webhook must not strand
-// them on credits they bought.
-router.post('/:id/unlock', authenticate, buyerOnly, requireActiveBilling, requireIdentityVerificationOrActiveSubscription, unlockListing);
+router.post('/:id/unlock', authenticate, buyerOnly, requireActiveBilling, unlockListing);
 
 export default router;

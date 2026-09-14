@@ -145,15 +145,6 @@ export const handleStripeWebhook = async (req: Request, res: Response): Promise<
         await handleChargeDisputeCreated(event.data.object as Stripe.Dispute);
         break;
 
-      // Identity Verification Events
-      case 'identity.verification_session.verified':
-        await handleIdentityVerified(event.data.object as any);
-        break;
-
-      case 'identity.verification_session.requires_input':
-        await handleIdentityRequiresInput(event.data.object as any);
-        break;
-
       default:
         logger.debug('Unhandled webhook event type', { type: event.type });
     }
@@ -1115,103 +1106,6 @@ async function detectGuideTier(
   }
 
   return null;
-}
-
-// ============================================
-// Identity Verification Handlers
-// ============================================
-
-async function handleIdentityVerified(session: any): Promise<void> {
-  const userId = session.metadata?.userId;
-  if (!userId) {
-    logger.warn('Identity verification session missing userId metadata', {
-      sessionId: session.id,
-    });
-    return;
-  }
-
-  const user = await User.findByPk(userId);
-  if (!user) {
-    logger.error('User not found for identity verification', { userId });
-    return;
-  }
-
-  // Update user as verified
-  const newTrustScore = Math.min((user.trustScore || 50) + 15, 100);
-  await user.update({
-    identityVerified: true,
-    identityVerifiedAt: new Date(),
-    identityVerificationStatus: 'verified',
-    trustScore: newTrustScore,
-  });
-
-  logger.info('User identity verified via webhook', {
-    userId,
-    sessionId: session.id,
-    newTrustScore,
-  });
-
-  // Send notification
-  await notificationService.create({
-    userId,
-    type: NotificationType.VERIFICATION,
-    title: 'Identity Verified',
-    message: 'Your identity has been successfully verified. You now have full access to all platform features.',
-    link: '/settings',
-  });
-
-  // Send email
-  await emailService.sendEmail({
-    to: user.email,
-    subject: 'Identity Verification Successful - Domilea',
-    html: `
-      <h2>Identity Verified</h2>
-      <p>Hi ${user.name},</p>
-      <p>Your identity has been successfully verified on Domilea. You now have full access to all platform features including:</p>
-      <ul>
-        <li>Viewing MC Authority details</li>
-        <li>Making and receiving offers</li>
-        <li>Sending messages</li>
-        <li>Purchasing credits</li>
-      </ul>
-      <p>Thank you for helping us maintain a safe and trustworthy marketplace.</p>
-    `,
-  });
-}
-
-async function handleIdentityRequiresInput(session: any): Promise<void> {
-  const userId = session.metadata?.userId;
-  if (!userId) {
-    logger.warn('Identity verification requires_input session missing userId metadata', {
-      sessionId: session.id,
-    });
-    return;
-  }
-
-  const user = await User.findByPk(userId);
-  if (!user) {
-    logger.error('User not found for identity verification requires_input', { userId });
-    return;
-  }
-
-  await user.update({
-    identityVerificationStatus: 'requires_input',
-  });
-
-  logger.info('Identity verification requires input', {
-    userId,
-    sessionId: session.id,
-    lastError: session.last_error,
-  });
-
-  // Send notification to retry
-  await notificationService.create({
-    userId,
-    type: NotificationType.VERIFICATION,
-    title: 'Identity Verification Needs Attention',
-    message: 'Your identity verification could not be completed. Please try again with a clear photo of your government ID.',
-    link: '/settings',
-  });
 }
 
 // ============================================

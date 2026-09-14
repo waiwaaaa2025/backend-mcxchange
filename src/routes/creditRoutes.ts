@@ -14,7 +14,7 @@ import {
   getCreditPacks,
   purchaseCreditPack,
 } from '../controllers/creditController';
-import { authenticate, adminOnly, requireIdentityVerification } from '../middleware/auth';
+import { authenticate, adminOnly } from '../middleware/auth';
 import validate from '../middleware/validate';
 
 const router = Router();
@@ -31,9 +31,9 @@ router.get('/balance', getBalance);
 router.get('/history', getHistory);
 router.get('/check', checkCredits);
 router.get('/subscription', getCurrentSubscription);
-router.post('/subscribe', requireIdentityVerification, validate(subscribeValidation), subscribe);
+router.post('/subscribe', validate(subscribeValidation), subscribe);
 router.post('/cancel-subscription', cancelSubscription);
-router.post('/packs/:packId/checkout', requireIdentityVerification, purchaseCreditPack);
+router.post('/packs/:packId/checkout', purchaseCreditPack);
 
 // Admin routes
 router.post('/bonus', adminOnly, validate(addBonusCreditsValidation), addBonusCredits);

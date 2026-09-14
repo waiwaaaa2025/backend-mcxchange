@@ -11,7 +11,7 @@ import {
   sendMessageValidation,
   sendInquiryValidation,
 } from '../controllers/messageController';
-import { authenticate, requireIdentityVerification } from '../middleware/auth';
+import { authenticate } from '../middleware/auth';
 import validate from '../middleware/validate';
 
 const router = Router();
@@ -26,7 +26,7 @@ router.put('/conversations/:partnerId/read', markConversationAsRead);
 
 // Messages — any authenticated user (buyer or seller) can send inquiries to admin
 router.post('/inquiries', validate(sendInquiryValidation), sendInquiryToAdmin);
-router.post('/', requireIdentityVerification, validate(sendMessageValidation), sendMessage);
+router.post('/', validate(sendMessageValidation), sendMessage);
 router.put('/:id/read', markAsRead);
 router.delete('/:id', deleteMessage);
 

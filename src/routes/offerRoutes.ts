@@ -14,7 +14,7 @@ import {
   createOfferValidation,
   counterOfferValidation,
 } from '../controllers/offerController';
-import { authenticate, sellerOnly, buyerOnly, adminOnly, requireIdentityVerification } from '../middleware/auth';
+import { authenticate, sellerOnly, buyerOnly, adminOnly } from '../middleware/auth';
 import validate from '../middleware/validate';
 
 const router = Router();
@@ -23,7 +23,7 @@ const router = Router();
 router.use(authenticate);
 
 // Buyer routes
-router.post('/', buyerOnly, requireIdentityVerification, validate(createOfferValidation), createOffer);
+router.post('/', buyerOnly, validate(createOfferValidation), createOffer);
 router.get('/my-offers', buyerOnly, getBuyerOffers);
 router.post('/:id/accept-counter', buyerOnly, acceptCounterOffer);
 router.post('/:id/withdraw', buyerOnly, withdrawOffer);
@@ -31,9 +31,9 @@ router.post('/:id/deposit-checkout', buyerOnly, createDepositCheckout);
 
 // Seller routes
 router.get('/received', sellerOnly, getSellerOffers);
-router.post('/:id/accept', sellerOnly, requireIdentityVerification, acceptOffer);
+router.post('/:id/accept', sellerOnly, acceptOffer);
 router.post('/:id/reject', sellerOnly, rejectOffer);
-router.post('/:id/counter', sellerOnly, requireIdentityVerification, validate(counterOfferValidation), counterOffer);
+router.post('/:id/counter', sellerOnly, validate(counterOfferValidation), counterOffer);
 
 // Get single offer (buyer, seller, or admin)
 router.get('/:id', getOffer);

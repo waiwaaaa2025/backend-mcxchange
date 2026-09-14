@@ -290,10 +290,6 @@ export const createSubscriptionCheckout = asyncHandler(async (req: AuthRequest, 
       plan,
       isYearly: isYearly ? 'true' : 'false',
     },
-    // Only the credit-granting marketplace plans (starter/premium/enterprise)
-    // gate access behind Stripe Identity. Lead Generator is a standalone tool —
-    // buyers go straight into it after payment, no verification required.
-    showVerificationNotice: !isLeadGen,
   });
 
   if (!result.success) {
