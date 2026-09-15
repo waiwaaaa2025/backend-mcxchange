@@ -14,6 +14,7 @@ import { creditService } from '../services/creditService';
 import { buyerPreferencesService } from '../services/buyerPreferencesService';
 import { rankListings, hasAnyCriteria } from '../services/matchService';
 import { hasActiveBundlePromo } from '../utils/bundlePromo';
+import { isFreeToolsPromoActive, FREE_TOOLS_PROMO_ENDS_AT } from '../utils/freeToolsPromo';
 import carrierDataService from '../services/carrierDataService';
 import { InsuranceLeadFilters } from '../types/carrierData';
 import {
@@ -306,8 +307,18 @@ export const createSubscriptionCheckout = asyncHandler(async (req: AuthRequest, 
   });
 });
 
-// Check CarrierPulse access for the current user
+// Check CarrierPulse / Chameleon Check access for the current user (includes the
+// limited-time free tools promo)
 export const getCarrierPulseAccess = asyncHandler(async (req: AuthRequest, res: Response) => {
+  await sendToolAccess(req, res, true);
+});
+
+// Insurance Leads access — same entitlement as CarrierPulse but NOT part of the free tools promo
+export const getInsuranceLeadsAccess = asyncHandler(async (req: AuthRequest, res: Response) => {
+  await sendToolAccess(req, res, false);
+});
+
+async function sendToolAccess(req: AuthRequest, res: Response, includeFreePromo: boolean) {
   if (!req.user) {
     res.status(401).json({ success: false, error: 'Not authenticated' });
     return;
@@ -328,6 +339,9 @@ export const getCarrierPulseAccess = asyncHandler(async (req: AuthRequest, res: 
   // Buyer's-Guide 60-day bundle includes CarrierPulse access for the promo window
   const bundlePromo = hasActiveBundlePromo(user);
 
+  // Limited-time free access for everyone signed in
+  const freePromo = includeFreePromo && isFreeToolsPromoActive();
+
   // Admin always has access
   const isAdmin = req.user.role === UserRole.ADMIN;
 
@@ -339,19 +353,25 @@ export const getCarrierPulseAccess = asyncHandler(async (req: AuthRequest, res: 
         ? 'standalone'
         : bundlePromo
           ? 'bundle_promo'
-          : 'none';
+          : freePromo
+            ? 'free_promo'
+            : 'none';
 
   res.json({
     success: true,
     data: {
-      hasAccess: includedInPlan || hasStandaloneAccess || isAdmin || bundlePromo,
+      hasAccess: includedInPlan || hasStandaloneAccess || isAdmin || bundlePromo || freePromo,
       reason,
       currentPlan: plan || null,
       isActive,
-      promoExpiresAt: bundlePromo ? user?.promoAccessExpiresAt : null,
+      promoExpiresAt: bundlePromo
+        ? user?.promoAccessExpiresAt
+        : reason === 'free_promo'
+          ? FREE_TOOLS_PROMO_ENDS_AT
+          : null,
     },
   });
-});
+}
 
 // Create CarrierPulse checkout session ($12.99/mo standalone or add-on for Starter)
 export const createCarrierPulseCheckout = asyncHandler(async (req: AuthRequest, res: Response) => {

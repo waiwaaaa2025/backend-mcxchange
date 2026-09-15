@@ -19,6 +19,7 @@ import {
   getCreditsafeReport,
   getCreditsafeFreeSearch,
   getCarrierPulseAccess,
+  getInsuranceLeadsAccess,
   createCarrierPulseCheckout,
   getCarrierPulseCreditsafeSearch,
   getCarrierPulseCreditsafeReport,
@@ -84,7 +85,7 @@ router.get('/carrier-pulse/credit-report/:dotNumber', requireSubscription, check
 
 // Pending Insurance Leads - same access gate as CarrierPulse (handled in endpoint)
 router.get('/insurance-leads', getInsuranceLeads);
-router.get('/insurance-leads/access', getCarrierPulseAccess);
+router.get('/insurance-leads/access', getInsuranceLeadsAccess);
 router.post('/insurance-leads/:dotNumber/request-outreach', requestBrokerOutreach);
 
 // Credit report — open to all buyers (search free, report $35 or included in Premium)
