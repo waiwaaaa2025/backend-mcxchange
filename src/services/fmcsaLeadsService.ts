@@ -44,6 +44,7 @@ interface CancellationRow {
   usdot_number?: string;
   docket_number?: string;
   cancl_effective_date?: string;
+  effective_date?: string;
   insurance_company_name?: string;
   policy_no?: string;
 }
@@ -62,6 +63,13 @@ interface CensusRow {
 interface ActivePolicyRow {
   usdot_number?: string;
   policy_no?: string;
+  effective_date?: string;
+}
+
+// The two datasets punctuate the same policy differently ("02TRM069061-01" in one,
+// "02TRM06906101" in the other), so compare on alphanumerics only.
+function normalizePolicy(value: string | undefined): string {
+  return (value || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
 }
 
 function yyyymmdd(date: Date): string {
@@ -140,7 +148,9 @@ class FmcsaLeadsService {
 
     const state = filters.state ? filters.state.toUpperCase() : null;
     const safety = safetyCode(filters.minSafety);
-    const cacheKey = `insurance_leads:fmcsa:v1:${JSON.stringify({
+    // Bump the version whenever the lead rules change so cached lists from the
+    // previous rules aren't served for up to an hour after a deploy.
+    const cacheKey = `insurance_leads:fmcsa:v2:${JSON.stringify({
       windowDays,
       state,
       minUnits: filters.minUnits ?? null,
@@ -189,7 +199,7 @@ class FmcsaLeadsService {
 
     // 1. Every BIPD cancellation filed for the window, soonest first.
     const cancellations = await socrata<CancellationRow>(DATASET_CANCELLATIONS, {
-      $select: 'usdot_number, docket_number, cancl_effective_date, insurance_company_name, policy_no',
+      $select: 'usdot_number, docket_number, cancl_effective_date, effective_date, insurance_company_name, policy_no',
       $where: `ins_type_desc='BIPD' AND cancl_effective_date >= '${yyyymmdd(today)}' AND cancl_effective_date <= '${yyyymmdd(windowEnd)}'`,
       $order: 'cancl_effective_date ASC',
       $limit: '50000',
@@ -233,19 +243,19 @@ class FmcsaLeadsService {
     //    upcoming cancellations are insurer switches (TERM/REPL), not lapses.
     const activePolicies = await overDotChunks<ActivePolicyRow>(Array.from(carriers.keys()), (chunk) =>
       socrata<ActivePolicyRow>(DATASET_ACTIVE_POLICIES, {
-        $select: 'usdot_number, policy_no',
+        $select: 'usdot_number, policy_no, effective_date',
         $where: `ins_type_code='1' AND usdot_number in (${quoteList(chunk)})`,
         $limit: String(DOT_CHUNK * 20),
       })
     );
     if (!activePolicies) return null;
 
-    const otherActivePolicies = new Map<string, Set<string>>();
+    const activeByDot = new Map<string, ActivePolicyRow[]>();
     for (const row of activePolicies) {
       const dot = (row.usdot_number || '').trim();
       if (!dot) continue;
-      if (!otherActivePolicies.has(dot)) otherActivePolicies.set(dot, new Set());
-      otherActivePolicies.get(dot)!.add((row.policy_no || '').trim());
+      if (!activeByDot.has(dot)) activeByDot.set(dot, []);
+      activeByDot.get(dot)!.push(row);
     }
 
     const leads: InsuranceLead[] = [];
@@ -253,9 +263,19 @@ class FmcsaLeadsService {
       const cancellation = soonest.get(dot);
       if (!cancellation) continue;
 
-      const cancelling = (cancellation.policy_no || '').trim();
-      const replacements = otherActivePolicies.get(dot);
-      const hasReplacement = !!replacements && Array.from(replacements).some((p) => p && p !== cancelling);
+      // Coverage counts as replaced when the carrier has an active BIPD policy that
+      // is either a different policy, or the same policy re-filed with a later
+      // effective date — FMCSA re-files the same number to supersede a pending
+      // cancellation, which leaves the old cancellation row in place.
+      const cancellingPolicy = normalizePolicy(cancellation.policy_no);
+      const cancellingEffective = (cancellation.effective_date || '').trim();
+      const hasReplacement = (activeByDot.get(dot) || []).some((policy) => {
+        const active = normalizePolicy(policy.policy_no);
+        if (!active) return false;
+        if (active !== cancellingPolicy) return true;
+        const effective = (policy.effective_date || '').trim();
+        return !!effective && !!cancellingEffective && effective > cancellingEffective;
+      });
       if (hasReplacement) continue;
 
       const expiry = isoFromYyyymmdd(cancellation.cancl_effective_date || '');
