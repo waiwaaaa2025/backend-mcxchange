@@ -126,6 +126,9 @@ async function main() {
     console.log('\nNOT submitted. Review at https://dashboard.stripe.com/disputes/' + disputeId);
     console.log('then submit there, or re-run with --submit.');
   }
+  // The Sequelize pool keeps the event loop alive, which leaves the one-off dyno
+  // running long after the work is done.
+  process.exit(0);
 }
 
 main().catch((e) => { console.error('Failed:', e.message); process.exit(1); });
