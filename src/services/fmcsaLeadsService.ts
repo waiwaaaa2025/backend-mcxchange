@@ -35,6 +35,11 @@ const DATASET_CENSUS = 'az4n-8mr2';
 // Socrata allows anonymous use; an app token only raises the shared rate limit.
 const APP_TOKEN = process.env.FMCSA_SOCRATA_APP_TOKEN || '';
 
+// Carriers whose cancellation already took effect and who have no BIPD policy on
+// file are the strongest leads — coverage is gone, not merely scheduled to go — so
+// the search looks this far back as well as forward.
+const LAPSED_LOOKBACK_DAYS = 30;
+
 // `dot_number in (...)` lists — 150 keeps the query string well under Socrata's limit.
 const DOT_CHUNK = 150;
 // Chunks run concurrently in small batches so a wide search doesn't burst the API.
@@ -151,7 +156,7 @@ class FmcsaLeadsService {
     const safety = safetyCode(filters.minSafety);
     // Bump the version whenever the lead rules change so cached lists from the
     // previous rules aren't served for up to an hour after a deploy.
-    const cacheKey = `insurance_leads:fmcsa:v3:${JSON.stringify({
+    const cacheKey = `insurance_leads:fmcsa:v4:${JSON.stringify({
       windowDays,
       state,
       minUnits: filters.minUnits ?? null,
@@ -196,12 +201,14 @@ class FmcsaLeadsService {
     filters: InsuranceLeadFilters;
   }): Promise<InsuranceLead[] | null> {
     const today = new Date();
+    const todayStamp = yyyymmdd(today);
     const windowEnd = new Date(today.getTime() + windowDays * 86_400_000);
+    const windowStart = new Date(today.getTime() - LAPSED_LOOKBACK_DAYS * 86_400_000);
 
-    // 1. Every BIPD cancellation filed for the window, soonest first.
+    // 1. Every BIPD cancellation in the window — recently lapsed as well as upcoming.
     const cancellations = await socrata<CancellationRow>(DATASET_CANCELLATIONS, {
       $select: 'usdot_number, docket_number, cancl_effective_date, effective_date, insurance_company_name, policy_no',
-      $where: `ins_type_desc='BIPD' AND cancl_effective_date >= '${yyyymmdd(today)}' AND cancl_effective_date <= '${yyyymmdd(windowEnd)}'`,
+      $where: `ins_type_desc='BIPD' AND cancl_effective_date >= '${yyyymmdd(windowStart)}' AND cancl_effective_date <= '${yyyymmdd(windowEnd)}'`,
       $order: 'cancl_effective_date ASC',
       $limit: '50000',
     });
@@ -264,25 +271,36 @@ class FmcsaLeadsService {
       const cancellation = soonest.get(dot);
       if (!cancellation) continue;
 
-      // Coverage counts as replaced when the carrier has an active BIPD policy that is
-      // either a different policy, or the same policy filed again after the cancelled
-      // one took effect — by a later effective date or a later transaction date.
-      // FMCSA supersedes a pending cancellation by re-filing the same policy number
-      // (sometimes keeping the original effective date, so only trans_date moves) and
-      // leaves the stale cancellation row behind. Verified against the L&I record for
-      // DOT 3141380 / MC99414, which shows active coverage and no pending cancellation.
-      const cancellingPolicy = normalizePolicy(cancellation.policy_no);
-      const cancellingEffective = (cancellation.effective_date || '').trim();
-      const hasReplacement = (activeByDot.get(dot) || []).some((policy) => {
-        const active = normalizePolicy(policy.policy_no);
-        if (!active) return false;
-        if (active !== cancellingPolicy) return true;
-        if (!cancellingEffective) return false;
-        const effective = (policy.effective_date || '').trim();
-        const filed = (policy.trans_date || '').trim();
-        return (!!effective && effective > cancellingEffective) || (!!filed && filed > cancellingEffective);
-      });
-      if (hasReplacement) continue;
+      const cancelStamp = (cancellation.cancl_effective_date || '').trim();
+      const activeRows = activeByDot.get(dot) || [];
+      const lapsed = !!cancelStamp && cancelStamp < todayStamp;
+
+      if (lapsed) {
+        // Cancellation already took effect: a lead only while nothing replaced it.
+        // Any BIPD policy on file means they re-insured.
+        if (activeRows.some((policy) => normalizePolicy(policy.policy_no))) continue;
+      } else {
+        // Coverage counts as replaced when the carrier has an active BIPD policy that is
+        // either a different policy, or the same policy filed again after the cancelled
+        // one took effect — by a later effective date or a later transaction date.
+        // FMCSA supersedes a pending cancellation by re-filing the same policy number
+        // (sometimes keeping the original effective date, so only trans_date moves) and
+        // leaves the stale cancellation row behind. Confirmed on motus.dot.gov for DOTs
+        // 3141380 (MC99414), 1116622 (MC456935), 4428380 and 4025882 — all show active
+        // coverage with no pending cancellation.
+        const cancellingPolicy = normalizePolicy(cancellation.policy_no);
+        const cancellingEffective = (cancellation.effective_date || '').trim();
+        const hasReplacement = activeRows.some((policy) => {
+          const active = normalizePolicy(policy.policy_no);
+          if (!active) return false;
+          if (active !== cancellingPolicy) return true;
+          if (!cancellingEffective) return false;
+          const effective = (policy.effective_date || '').trim();
+          const filed = (policy.trans_date || '').trim();
+          return (!!effective && effective > cancellingEffective) || (!!filed && filed > cancellingEffective);
+        });
+        if (hasReplacement) continue;
+      }
 
       const expiry = isoFromYyyymmdd(cancellation.cancl_effective_date || '');
       const docket = (cancellation.docket_number || '').trim();
@@ -296,15 +314,21 @@ class FmcsaLeadsService {
         insuranceStatus: 'pending',
         insuranceExpiryDate: expiry,
         daysUntilExpiry: expiry ? daysUntil(expiry) : null,
-        pendingReason: 'CANCELLATION_SCHEDULED',
+        pendingReason: lapsed ? 'COVERAGE_LAPSED' : 'CANCELLATION_SCHEDULED',
       });
     }
 
-    leads.sort(
-      (a, b) =>
-        (a.daysUntilExpiry ?? Infinity) - (b.daysUntilExpiry ?? Infinity) ||
-        a.dotNumber.localeCompare(b.dotNumber)
-    );
+    // Already-uninsured carriers first (most recent lapse first — the coldest trail
+    // is the oldest one), then upcoming cancellations by how soon they bite.
+    leads.sort((a, b) => {
+      const aDays = a.daysUntilExpiry ?? Infinity;
+      const bDays = b.daysUntilExpiry ?? Infinity;
+      const aLapsed = a.pendingReason === 'COVERAGE_LAPSED';
+      const bLapsed = b.pendingReason === 'COVERAGE_LAPSED';
+      if (aLapsed !== bLapsed) return aLapsed ? -1 : 1;
+      if (aLapsed) return bDays - aDays;
+      return aDays - bDays || a.dotNumber.localeCompare(b.dotNumber);
+    });
     return leads;
   }
 }
