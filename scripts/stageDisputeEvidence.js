@@ -103,8 +103,11 @@ async function main() {
     uncategorized_file: evidenceFileId,
     service_documentation: evidenceFileId,
     customer_signature: evidenceFileId,
-    terms_of_service: termsFileId,
+    // Stripe has no `terms_of_service` evidence field — the Article 7 PDF is
+    // both the cancellation policy and the payments-are-final policy, so it
+    // goes in those two slots.
     cancellation_policy: termsFileId,
+    refund_policy: termsFileId,
   };
 
   console.log(`Staging on the dispute (submit=${submit})...`);

@@ -186,8 +186,10 @@ async function main() {
     service_documentation: evidenceFileId,
   };
   if (termsFileId) {
-    evidence.terms_of_service = termsFileId;
+    // Stripe has no `terms_of_service` evidence field; the Article 7 PDF is both
+    // the cancellation policy and the payments-are-final policy.
     evidence.cancellation_policy = termsFileId;
+    evidence.refund_policy = termsFileId;
   }
 
   console.log(`Updating dispute (reason=${dispute.reason}, submit=${submit})...`);
@@ -206,7 +208,7 @@ async function main() {
   console.log('\n  Files sent:');
   console.log(`    ✓ uncategorized_file / service_documentation: ${evidenceFileId}`);
   console.log(`    ✓ customer_signature:                         ${signatureFileId}`);
-  if (termsFileId) console.log(`    ✓ terms_of_service / cancellation_policy:     ${termsFileId}`);
+  if (termsFileId) console.log(`    ✓ cancellation_policy / refund_policy:        ${termsFileId}`);
   if (!submit) {
     console.log('\nNOT submitted yet. Review in the Stripe Dashboard, then submit there,');
     console.log('or re-run this command with --submit to submit now.');
