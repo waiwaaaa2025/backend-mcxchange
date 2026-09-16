@@ -64,6 +64,7 @@ interface ActivePolicyRow {
   usdot_number?: string;
   policy_no?: string;
   effective_date?: string;
+  trans_date?: string;
 }
 
 // The two datasets punctuate the same policy differently ("02TRM069061-01" in one,
@@ -150,7 +151,7 @@ class FmcsaLeadsService {
     const safety = safetyCode(filters.minSafety);
     // Bump the version whenever the lead rules change so cached lists from the
     // previous rules aren't served for up to an hour after a deploy.
-    const cacheKey = `insurance_leads:fmcsa:v2:${JSON.stringify({
+    const cacheKey = `insurance_leads:fmcsa:v3:${JSON.stringify({
       windowDays,
       state,
       minUnits: filters.minUnits ?? null,
@@ -243,7 +244,7 @@ class FmcsaLeadsService {
     //    upcoming cancellations are insurer switches (TERM/REPL), not lapses.
     const activePolicies = await overDotChunks<ActivePolicyRow>(Array.from(carriers.keys()), (chunk) =>
       socrata<ActivePolicyRow>(DATASET_ACTIVE_POLICIES, {
-        $select: 'usdot_number, policy_no, effective_date',
+        $select: 'usdot_number, policy_no, effective_date, trans_date',
         $where: `ins_type_code='1' AND usdot_number in (${quoteList(chunk)})`,
         $limit: String(DOT_CHUNK * 20),
       })
@@ -263,18 +264,23 @@ class FmcsaLeadsService {
       const cancellation = soonest.get(dot);
       if (!cancellation) continue;
 
-      // Coverage counts as replaced when the carrier has an active BIPD policy that
-      // is either a different policy, or the same policy re-filed with a later
-      // effective date — FMCSA re-files the same number to supersede a pending
-      // cancellation, which leaves the old cancellation row in place.
+      // Coverage counts as replaced when the carrier has an active BIPD policy that is
+      // either a different policy, or the same policy filed again after the cancelled
+      // one took effect — by a later effective date or a later transaction date.
+      // FMCSA supersedes a pending cancellation by re-filing the same policy number
+      // (sometimes keeping the original effective date, so only trans_date moves) and
+      // leaves the stale cancellation row behind. Verified against the L&I record for
+      // DOT 3141380 / MC99414, which shows active coverage and no pending cancellation.
       const cancellingPolicy = normalizePolicy(cancellation.policy_no);
       const cancellingEffective = (cancellation.effective_date || '').trim();
       const hasReplacement = (activeByDot.get(dot) || []).some((policy) => {
         const active = normalizePolicy(policy.policy_no);
         if (!active) return false;
         if (active !== cancellingPolicy) return true;
+        if (!cancellingEffective) return false;
         const effective = (policy.effective_date || '').trim();
-        return !!effective && !!cancellingEffective && effective > cancellingEffective;
+        const filed = (policy.trans_date || '').trim();
+        return (!!effective && effective > cancellingEffective) || (!!filed && filed > cancellingEffective);
       });
       if (hasReplacement) continue;
 
