@@ -132,7 +132,8 @@ async function main() {
     if (!fs.existsSync(p)) { console.error(`File not found: ${p}`); process.exit(2); }
   }
 
-  const stripe = new Stripe(key);
+  // PDF uploads regularly exceed Stripe's 80s default client timeout.
+  const stripe = new Stripe(key, { timeout: 180000, maxNetworkRetries: 2 });
   const dispute = await stripe.disputes.retrieve(disputeId);
 
   // ── Structured text fields ────────────────────────────────────────────────

@@ -44,7 +44,8 @@ async function main() {
     process.exit(1);
   }
 
-  const stripe = new Stripe(key);
+  // PDF uploads over the dyno's network regularly exceed Stripe's 80s default.
+  const stripe = new Stripe(key, { timeout: 180000, maxNetworkRetries: 2 });
   const dispute = await stripe.disputes.retrieve(disputeId);
   const chargeId = typeof dispute.charge === 'string' ? dispute.charge : dispute.charge?.id;
 
@@ -80,11 +81,12 @@ async function main() {
     console.warn(`  ⚠ no data for: ${built.meta.missing.join(', ')}`);
   }
 
-  console.log('Uploading PDFs...');
-  const [evidenceFileId, termsFileId] = await Promise.all([
-    upload(stripe, evidencePdf.buffer, evidencePdf.filename),
-    upload(stripe, termsPdf.buffer, termsPdf.filename),
-  ]);
+  console.log(`Uploading PDFs (evidence ${(evidencePdf.buffer.length / 1024).toFixed(0)}KB, ` +
+    `terms ${(termsPdf.buffer.length / 1024).toFixed(0)}KB)...`);
+  const evidenceFileId = await upload(stripe, evidencePdf.buffer, evidencePdf.filename);
+  console.log(`  evidence uploaded: ${evidenceFileId}`);
+  const termsFileId = await upload(stripe, termsPdf.buffer, termsPdf.filename);
+  console.log(`  terms uploaded:    ${termsFileId}`);
 
   const evidence = {
     ...built.fields,
