@@ -61,12 +61,24 @@ function clip(value) {
     : t.slice(0, MAX_FIELD_CHARS - 100) + '\n… (truncated; full record in the attached evidence PDF)';
 }
 
-async function uploadFile(stripe, path) {
-  const file = await stripe.files.create({
-    purpose: 'dispute_evidence',
-    file: { data: fs.readFileSync(path), name: path.split('/').pop(), type: 'application/pdf' },
+// stripe-node v20's multipart uploader hangs on Heroku dynos (a 23-byte file
+// still times out after 90s, while files.stripe.com answers curl in 90ms), so
+// dispute files go up over plain fetch.
+async function uploadFile(key, path) {
+  const buffer = fs.readFileSync(path);
+  const name = path.split('/').pop();
+  const fd = new FormData();
+  fd.append('purpose', 'dispute_evidence');
+  fd.append('file', new Blob([buffer], { type: 'application/pdf' }), name);
+  const res = await fetch('https://files.stripe.com/v1/files', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${key}` },
+    body: fd,
+    signal: AbortSignal.timeout(120000),
   });
-  return file.id;
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(`file upload failed (${res.status}): ${json.error?.message || 'unknown error'}`);
+  return json.id;
 }
 
 // Fields Stripe can supply on its own from the disputed charge — used as a
@@ -163,9 +175,9 @@ async function main() {
 
   // ── Files ─────────────────────────────────────────────────────────────────
   console.log(`Uploading evidence files for dispute ${disputeId}...`);
-  const evidenceFileId = await uploadFile(stripe, evidencePath);
-  const termsFileId = termsPath ? await uploadFile(stripe, termsPath) : undefined;
-  const signatureFileId = signaturePath ? await uploadFile(stripe, signaturePath) : evidenceFileId;
+  const evidenceFileId = await uploadFile(key, evidencePath);
+  const termsFileId = termsPath ? await uploadFile(key, termsPath) : undefined;
+  const signatureFileId = signaturePath ? await uploadFile(key, signaturePath) : evidenceFileId;
 
   const evidence = {
     ...textFields,

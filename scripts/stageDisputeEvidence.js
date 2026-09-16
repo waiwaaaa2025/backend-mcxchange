@@ -26,12 +26,22 @@ function arg(name, fallback) {
   return next && !next.startsWith('--') ? next : true;
 }
 
-async function upload(stripe, buffer, name) {
-  const file = await stripe.files.create({
-    purpose: 'dispute_evidence',
-    file: { data: buffer, name, type: 'application/pdf' },
+// stripe-node v20's multipart uploader hangs on Heroku dynos (a 23-byte file
+// still times out after 90s, while files.stripe.com answers curl in 90ms), so
+// dispute files go up over plain fetch.
+async function upload(key, buffer, name) {
+  const fd = new FormData();
+  fd.append('purpose', 'dispute_evidence');
+  fd.append('file', new Blob([buffer], { type: 'application/pdf' }), name);
+  const res = await fetch('https://files.stripe.com/v1/files', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${key}` },
+    body: fd,
+    signal: AbortSignal.timeout(120000),
   });
-  return file.id;
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(`file upload failed (${res.status}): ${json.error?.message || 'unknown error'}`);
+  return json.id;
 }
 
 async function main() {
@@ -83,9 +93,9 @@ async function main() {
 
   console.log(`Uploading PDFs (evidence ${(evidencePdf.buffer.length / 1024).toFixed(0)}KB, ` +
     `terms ${(termsPdf.buffer.length / 1024).toFixed(0)}KB)...`);
-  const evidenceFileId = await upload(stripe, evidencePdf.buffer, evidencePdf.filename);
+  const evidenceFileId = await upload(key, evidencePdf.buffer, evidencePdf.filename);
   console.log(`  evidence uploaded: ${evidenceFileId}`);
-  const termsFileId = await upload(stripe, termsPdf.buffer, termsPdf.filename);
+  const termsFileId = await upload(key, termsPdf.buffer, termsPdf.filename);
   console.log(`  terms uploaded:    ${termsFileId}`);
 
   const evidence = {
