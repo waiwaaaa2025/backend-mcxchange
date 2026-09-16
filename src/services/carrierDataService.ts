@@ -7,6 +7,7 @@ import {
 } from '../types/carrierData';
 import cacheService from './cacheService';
 import morproLinqService, { safetyLabel, type LinqSearchFilters } from './morproLinqService';
+import fmcsaLeadsService from './fmcsaLeadsService';
 import logger from '../utils/logger';
 import { AppError, TooManyRequestsError } from '../middleware/errorHandler';
 
@@ -356,6 +357,22 @@ class CarrierDataService {
    * Cached in Redis for 1h keyed by filters + cursor (dates roll daily).
    */
   async searchInsuranceLeads(
+    filters: InsuranceLeadFilters,
+    cursor: string | null = null,
+    limit = 25
+  ): Promise<InsuranceLeadsResult | null> {
+    // FMCSA's own feed first: LINQ barely has this data (probed 2026-09-15 — a
+    // 30-day window gave 3 carriers in IL / 18 nationally, against 112 / 1,740
+    // from FMCSA), so LINQ is only the fallback for this search.
+    const fmcsa = await fmcsaLeadsService.searchInsuranceLeads(filters, cursor, limit);
+    if (fmcsa) return fmcsa;
+
+    logger.warn('FMCSA insurance lead search unavailable — falling back to LINQ');
+    return this.searchInsuranceLeadsViaLinq(filters, cursor, limit);
+  }
+
+  /** Fallback for {@link searchInsuranceLeads} — LINQ's sparse cross-carrier search. */
+  private async searchInsuranceLeadsViaLinq(
     filters: InsuranceLeadFilters,
     cursor: string | null = null,
     limit = 25
