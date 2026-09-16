@@ -214,12 +214,31 @@ class FmcsaLeadsService {
     });
     if (!cancellations) return null;
 
-    // Keep the soonest cancellation per carrier (rows are already date-ordered).
+    // One cancellation per carrier: the soonest one still ahead of them, or failing
+    // that the most recent one already in effect. A carrier can carry both — an old
+    // cancellation they replaced and a fresh one pending — and judging them on the
+    // stale row would test live coverage as though it had already lapsed.
     const soonest = new Map<string, CancellationRow>();
     for (const row of cancellations) {
       const dot = (row.usdot_number || '').trim();
-      if (!dot || soonest.has(dot)) continue;
-      soonest.set(dot, row);
+      const stamp = (row.cancl_effective_date || '').trim();
+      if (!dot || !stamp) continue;
+
+      const current = soonest.get(dot);
+      if (!current) {
+        soonest.set(dot, row);
+        continue;
+      }
+
+      const currentStamp = (current.cancl_effective_date || '').trim();
+      const rowUpcoming = stamp >= todayStamp;
+      const currentUpcoming = currentStamp >= todayStamp;
+
+      if (rowUpcoming !== currentUpcoming) {
+        if (rowUpcoming) soonest.set(dot, row);
+      } else if (rowUpcoming ? stamp < currentStamp : stamp > currentStamp) {
+        soonest.set(dot, row);
+      }
     }
     if (soonest.size === 0) return [];
 
