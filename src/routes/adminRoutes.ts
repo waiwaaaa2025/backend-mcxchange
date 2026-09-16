@@ -53,6 +53,7 @@ import {
   recordManualDepositValidation,
   getUserListingsForDeposit,
   getUserDisputeEvidence,
+  getUserDisputeEvidenceFields,
   getTermsOfServicePdf,
   getOpenStripeDisputes,
   cancelUserSubscription,
@@ -118,6 +119,7 @@ router.post('/users/:id/verify-seller', verifySeller);
 router.post('/users/:id/credits', validate(adjustCreditsValidation), adjustUserCredits);
 router.get('/users/:id/listings-for-deposit', getUserListingsForDeposit);
 router.get('/users/:id/dispute-evidence', getUserDisputeEvidence);
+router.get('/users/:id/dispute-evidence-fields', getUserDisputeEvidenceFields);
 router.get('/terms-of-service.pdf', getTermsOfServicePdf);
 router.get('/disputes/stripe-open', getOpenStripeDisputes);
 router.post('/users/:id/manual-deposit', validate(recordManualDepositValidation), recordManualDeposit);

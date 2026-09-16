@@ -915,6 +915,25 @@ export const getUserDisputeEvidence = asyncHandler(async (req: AuthRequest, res:
   res.end(buffer);
 });
 
+// Download Stripe's STRUCTURED dispute-evidence fields for a user as JSON
+// (customer identity, purchase IP, service date, access activity log, product
+// description, cancellation disclosure, rebuttal). Feed the file to
+// scripts/submitDisputeEvidence.js --fields so the issuer receives the evidence
+// in the structured fields it actually weighs, not just as an attachment.
+export const getUserDisputeEvidenceFields = asyncHandler(async (req: AuthRequest, res: Response) => {
+  const { id } = req.params;
+  const disputeId = typeof req.query.disputeId === 'string' ? req.query.disputeId : undefined;
+  const result = await disputeEvidenceService.buildEvidenceFields(id, { disputeId });
+  const download = req.query.download === '1' || req.query.download === 'true';
+  if (download) {
+    res.setHeader('Content-Type', 'application/json');
+    res.setHeader('Content-Disposition', `attachment; filename="dispute-evidence-fields-${id}.json"`);
+    res.end(JSON.stringify(result, null, 2));
+    return;
+  }
+  res.json({ success: true, data: result });
+});
+
 // Download the Terms of Service PDF (payment & dispute provisions) to upload into
 // Stripe's `terms_of_service` dispute-evidence field.
 export const getTermsOfServicePdf = asyncHandler(async (_req: AuthRequest, res: Response) => {

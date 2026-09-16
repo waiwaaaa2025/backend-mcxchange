@@ -127,6 +127,220 @@ class DisputeEvidenceService {
     });
   }
 
+
+  /**
+   * Build Stripe's STRUCTURED dispute-evidence fields (the text fields issuers
+   * actually weigh) for a user, derived from the same records as the PDF:
+   * customer identity, purchase IP, service date, access activity log, product
+   * description, cancellation disclosure and a reason-specific rebuttal.
+   *
+   * The PDF is the exhibit; these fields are what Stripe forwards to the issuing
+   * bank in structured form. Pass `disputeId` to target a specific dispute,
+   * otherwise the first dispute awaiting a response is used.
+   */
+  async buildEvidenceFields(userId: string, opts: { disputeId?: string } = {}): Promise<{
+    fields: Record<string, string>;
+    meta: {
+      disputeId: string | null;
+      reason: string | null;
+      chargeId: string | null;
+      missing: string[];
+      generatedAt: string;
+    };
+  }> {
+    const user: any = await User.findByPk(userId);
+    if (!user) throw new NotFoundError('User');
+
+    const [subscription, unlocked, terms, paymentConsents, accessLog] = await Promise.all([
+      Subscription.findOne({ where: { userId } }),
+      UnlockedListing.findAll({ where: { userId }, order: [['createdAt', 'ASC']] }),
+      UserTermsAcceptance.findAll({ where: { userId }, order: [['acceptedAt', 'DESC']] }),
+      PaymentConsent.findAll({ where: { userId }, order: [['acceptedAt', 'DESC']] }),
+      UserAccessLog.findAll({ where: { userId }, order: [['createdAt', 'ASC']], limit: 500 }),
+    ]);
+
+    const listingIds = unlocked.map((u: any) => u.listingId);
+    const listings = listingIds.length ? await Listing.findAll({ where: { id: listingIds } }) : [];
+    const listingById = new Map(listings.map((l: any) => [l.id, l]));
+
+    let stripeData: { subscription: any; charges: any[]; disputes: any[]; checkoutSessions: any[] } = {
+      subscription: null, charges: [], disputes: [], checkoutSessions: [],
+    };
+    if (user.stripeCustomerId && stripeService.isEnabled()) {
+      try {
+        stripeData = await stripeService.getCustomerBillingEvidence(user.stripeCustomerId);
+      } catch (e) {
+        logger.error('Dispute evidence fields: Stripe pull failed', { userId, error: e });
+      }
+    }
+
+    // Target dispute: the requested one, else the first awaiting a response, else the latest.
+    const disputes = stripeData.disputes || [];
+    const dispute =
+      (opts.disputeId && disputes.find((d: any) => d.id === opts.disputeId)) ||
+      disputes.find((d: any) => d.status === 'needs_response' || d.status === 'warning_needs_response') ||
+      disputes[0] ||
+      null;
+    const chargeId: string | null = dispute
+      ? (typeof dispute.charge === 'string' ? dispute.charge : dispute.charge?.id || null)
+      : null;
+    const disputedCharge = chargeId ? stripeData.charges.find((c: any) => c.id === chargeId) : null;
+    const paidCharges = stripeData.charges.filter((c: any) => c.paid).sort((a: any, b: any) => a.created - b.created);
+
+    // Purchase IP: the signed checkout consent closest in time to the disputed
+    // charge (that is the session that produced it), else the latest consent,
+    // else the signup Terms acceptance, else the first recorded access event.
+    const chargeMs = (disputedCharge?.created || paidCharges[0]?.created || 0) * 1000;
+    const consentsByProximity = [...(paymentConsents as any[])].sort((a: any, b: any) =>
+      Math.abs(new Date(a.acceptedAt).getTime() - chargeMs) - Math.abs(new Date(b.acceptedAt).getTime() - chargeMs));
+    const purchaseIp =
+      (chargeMs ? consentsByProximity[0]?.ipAddress : '') ||
+      (paymentConsents as any[])[0]?.ipAddress ||
+      (terms as any[])[0]?.ipAddress ||
+      (accessLog as any[])[0]?.ipAddress ||
+      '';
+
+    const addr = disputedCharge?.billing_details?.address || stripeData.charges[0]?.billing_details?.address || null;
+    const billingAddress = addr
+      ? [addr.line1, addr.line2, [addr.city, addr.state, addr.postal_code].filter(Boolean).join(' '), addr.country]
+          .filter(Boolean).join('\n')
+      : '';
+
+    const serviceDate = paidCharges.length
+      ? new Date(paidCharges[0].created * 1000).toISOString().slice(0, 10)
+      : (subscription as any)?.startDate
+        ? new Date((subscription as any).startDate).toISOString().slice(0, 10)
+        : '';
+
+    const loginCount = (accessLog as any[]).filter((a) => a.event === 'LOGIN').length;
+    const plan = (subscription as any)?.plan || 'subscription';
+
+    // 20,000 characters is Stripe's per-field limit for evidence text.
+    const clip = (t: string): string =>
+      t.length <= 20000 ? t : t.slice(0, 19900) + '\n… (truncated; full record in the attached evidence PDF)';
+
+    const accessActivityLog = (accessLog as any[]).length
+      ? clip(
+          [
+            `Authenticated access events for ${user.email} (account ${user.id}), recorded by the platform with IP address and timestamp:`,
+            '',
+            ...(accessLog as any[]).map((a) =>
+              `${fmt(a.createdAt)}  ${String(a.event).padEnd(7)}  IP ${a.ipAddress || 'n/a'}  ${a.detail || ''}`.trimEnd()),
+            '',
+            `Total: ${(accessLog as any[]).length} event(s), including ${loginCount} authenticated login(s).`,
+          ].join('\n'))
+      : '';
+
+    const unlockLines = (unlocked as any[]).slice(0, 100).map((u: any, i: number) => {
+      const l: any = listingById.get(u.listingId);
+      return `${i + 1}. ${fmt(u.createdAt)} — MC ${l?.mcNumber || '—'} ${l?.legalName || l?.title || `(listing ${u.listingId})`} (−${u.creditsUsed} credit)`;
+    });
+
+    const productDescription = clip(
+      [
+        `Domilea is a B2B marketplace for motor carrier authorities (www.domilea.com). The customer purchased a ${plan} ` +
+          'subscription, billed month-to-month, which grants account credits used to unlock the confidential contact ' +
+          'details of motor carriers listed on the platform. The service is delivered digitally and immediately: access ' +
+          'is granted the moment the subscription is created, and each unlock discloses private information that cannot be returned.',
+        '',
+        `The customer consumed the service by unlocking ${(unlocked as any[]).length} carrier contact record(s).`,
+        ...(unlockLines.length ? ['', ...unlockLines] : []),
+        ...((unlocked as any[]).length > 100 ? ['', `… and ${(unlocked as any[]).length - 100} more (full list in the attached evidence PDF).`] : []),
+      ].join('\n'));
+
+    const cancellationPolicyDisclosure = clip(
+      'Subscriptions are billed month-to-month and may be cancelled at any time from the customer’s Subscription page ' +
+      'in their account or by emailing info@domilea.com. Cancellation stops all future billing. As disclosed in the ' +
+      'terms the customer accepted at signup and signed again at checkout: “' + CHECKOUT_CONSENT + '” ' +
+      `The full Terms of Service are published at ${TERMS_OF_SERVICE_URL} (payment provisions, Article 7).`);
+
+    const refundRefusalExplanation = clip(
+      'All payments are final under Article 7.3 of the Terms of Service, which the customer affirmatively accepted before ' +
+      'an account could be created' +
+      ((terms as any[])[0] ? ` (electronically signed by ${(terms as any[])[0].signatureName || 'the customer'} on ${fmt((terms as any[])[0].acceptedAt)} from IP ${(terms as any[])[0].ipAddress || 'n/a'})` : '') +
+      ((paymentConsents as any[])[0] ? ` and signed again at the moment of payment (signed by ${(paymentConsents as any[])[0].signatureName || 'the customer'} on ${fmt((paymentConsents as any[])[0].acceptedAt)} from IP ${(paymentConsents as any[])[0].ipAddress || 'n/a'})` : '') +
+      `. The service was delivered in full and consumed: ${(unlocked as any[]).length} confidential carrier contact record(s) were unlocked and ` +
+      'disclosed to the customer. Article 7.4 of the same terms also expressly prohibits chargebacks and directs the ' +
+      'customer to contact info@domilea.com to resolve any billing issue; cancellation is available at any time from the ' +
+      'account\u2019s Subscription page or by email, and stops all future billing.');
+
+    const reason = dispute?.reason || null;
+    const summaryFacts = [
+      `Account: ${user.name} <${user.email}> (id ${user.id}), created ${fmt(user.memberSince || user.createdAt)}.`,
+      `Stripe customer ${user.stripeCustomerId || 'n/a'}; ${paidCharges.length} successful charge(s) on this card before the dispute.`,
+      `Authenticated logins recorded: ${loginCount}; last login ${fmt(user.lastLoginAt)}.`,
+      `Service consumed: ${(unlocked as any[]).length} carrier contact record(s) unlocked.`,
+      `Terms accepted at signup: ${(terms as any[])[0] ? `${fmt((terms as any[])[0].acceptedAt)} from IP ${(terms as any[])[0].ipAddress || 'n/a'}` : 'mandatory checkbox (signature capture postdates this account)'}.`,
+      `Payment terms signed at checkout: ${(paymentConsents as any[])[0] ? `${fmt((paymentConsents as any[])[0].acceptedAt)} from IP ${(paymentConsents as any[])[0].ipAddress || 'n/a'}` : 'signature capture postdates this charge; signup acceptance applies'}.`,
+      `Stripe Identity verified: ${user.identityVerified ? 'yes' : 'no'}.`,
+    ];
+    const uncategorizedText = clip(
+      [
+        'Merchant response — The Domilea Group (www.domilea.com).',
+        '',
+        'The disputed charge was authorized by the account holder, the service was delivered immediately and digitally, ' +
+          'and the customer used it. Supporting records:',
+        '',
+        ...summaryFacts.map((f) => `• ${f}`),
+        '',
+        'The attached PDF contains the full evidence packet: the Stripe billing record, the itemized list of carrier ' +
+          'records unlocked, the IP-stamped access activity log, the account credit ledger, and the customer’s ' +
+          'electronic signatures on the Terms of Service and the payment authorization.',
+        '',
+        'We respectfully request that this dispute be resolved in the merchant’s favor.',
+      ].join('\n'));
+
+    const fields: Record<string, string> = {
+      customer_name: user.name || '',
+      customer_email_address: user.email || '',
+      customer_purchase_ip: purchaseIp,
+      billing_address: billingAddress,
+      service_date: serviceDate,
+      product_description: productDescription,
+      access_activity_log: accessActivityLog,
+      cancellation_policy_disclosure: cancellationPolicyDisclosure,
+      refund_refusal_explanation: refundRefusalExplanation,
+      uncategorized_text: uncategorizedText,
+    };
+
+    // Reason-specific rebuttals — only sent when they actually apply.
+    if (reason === 'subscription_canceled') {
+      const cancelledAt = (subscription as any)?.cancelledAt;
+      fields.cancellation_rebuttal = clip(
+        cancelledAt
+          ? `Our records show the subscription was cancelled on ${fmt(cancelledAt)}. The disputed charge was made on ` +
+            `${disputedCharge ? stripeTs(disputedCharge.created) : 'the date shown in the Stripe billing record'}, i.e. for a billing period that began ` +
+            'before any cancellation request was received. Cancellation stops future billing; it does not reverse a period ' +
+            'already billed and used. The customer continued to access the platform and unlock carrier records during that period ' +
+            '(see the access activity log).'
+          : 'No cancellation request was ever received from this customer — there is no cancellation on record in the platform ' +
+            'database or in Stripe, and the subscription remained active and in use. Cancellation is available at any time from ' +
+            'the customer’s Subscription page or by emailing info@domilea.com.');
+    }
+    if (reason === 'duplicate') {
+      fields.duplicate_charge_explanation = clip(
+        [
+          'The charges are not duplicates: each is a separate monthly billing period of an active month-to-month subscription.',
+          '',
+          ...paidCharges.map((c: any) => `${stripeTs(c.created)}  ${money(c.amount, c.currency)}  ${c.id}`),
+        ].join('\n'));
+    }
+
+    const missing = Object.entries(fields).filter(([, v]) => !v).map(([k]) => k);
+    Object.keys(fields).forEach((k) => { if (!fields[k]) delete fields[k]; });
+
+    return {
+      fields,
+      meta: {
+        disputeId: dispute?.id || null,
+        reason,
+        chargeId,
+        missing,
+        generatedAt: new Date().toISOString(),
+      },
+    };
+  }
+
   private renderPdf(data: any): Promise<Buffer> {
     return new Promise(async (resolve, reject) => {
       try {
