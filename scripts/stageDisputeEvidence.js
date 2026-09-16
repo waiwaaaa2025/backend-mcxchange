@@ -56,7 +56,7 @@ async function main() {
     if (!customerId) {
       console.error(`No Stripe customer on charge ${chargeId} — this looks like a guest/payment-link sale with no`);
       console.error('platform account behind it. There is no account evidence to build; respond manually with proof');
-      console.error('of delivery (see docs/DISPUTES.md). Pass --user <userId> if you know the account.');
+      console.error('of delivery (see DISPUTE_RUNBOOK.md §2c). Pass --user <userId> if you know the account.');
       process.exit(3);
     }
     const user = await User.findOne({ where: { stripeCustomerId: customerId } });
