@@ -278,8 +278,8 @@ class DisputeEvidenceService {
       [
         'Merchant response — The Domilea Group (www.domilea.com).',
         '',
-        'The disputed charge was authorized by the account holder, the service was delivered immediately and digitally, ' +
-          'and the customer used it. Supporting records:',
+        'The disputed charge was authorized by the account holder and the service was delivered immediately and digitally' +
+          ((unlocked as any[]).length ? ', and the customer used it' : '') + '. Supporting records:',
         '',
         ...summaryFacts.map((f) => `• ${f}`),
         '',
@@ -306,16 +306,29 @@ class DisputeEvidenceService {
     // Reason-specific rebuttals — only sent when they actually apply.
     if (reason === 'subscription_canceled') {
       const cancelledAt = (subscription as any)?.cancelledAt;
+      // Only claim continued use if the records actually show it inside the
+      // disputed billing period — an assertion the attached log contradicts
+      // costs more credibility than it buys.
+      const periodEnd = chargeMs ? chargeMs + 31 * 86400000 : 0;
+      const inPeriod = chargeMs
+        ? [
+            ...(accessLog as any[]).map((a: any) => new Date(a.createdAt).getTime()),
+            ...(unlocked as any[]).map((u: any) => new Date(u.createdAt).getTime()),
+          ].filter((t) => t >= chargeMs && t <= periodEnd)
+        : [];
+      const usageSentence = inPeriod.length
+        ? ` The account was used ${inPeriod.length} time(s) during that billing period (most recently `
+          + `${fmt(new Date(Math.max(...inPeriod)))}) — see the access activity log.`
+        : '';
       fields.cancellation_rebuttal = clip(
         cancelledAt
-          ? `Our records show the subscription was cancelled on ${fmt(cancelledAt)}. The disputed charge was made on ` +
-            `${disputedCharge ? stripeTs(disputedCharge.created) : 'the date shown in the Stripe billing record'}, i.e. for a billing period that began ` +
-            'before any cancellation request was received. Cancellation stops future billing; it does not reverse a period ' +
-            'already billed and used. The customer continued to access the platform and unlock carrier records during that period ' +
-            '(see the access activity log).'
-          : 'No cancellation request was ever received from this customer — there is no cancellation on record in the platform ' +
-            'database or in Stripe, and the subscription remained active and in use. Cancellation is available at any time from ' +
-            'the customer’s Subscription page or by emailing info@domilea.com.');
+          ? `Our records show the subscription was cancelled on ${fmt(cancelledAt)}. The disputed charge was made on `
+            + `${disputedCharge ? stripeTs(disputedCharge.created) : 'the date shown in the Stripe billing record'}, i.e. for a billing period that began `
+            + 'before any cancellation request was received. Cancellation stops future billing; it does not reverse a period '
+            + 'already billed, during which the account remained active and entitled to the service.' + usageSentence
+          : 'No cancellation request was ever received from this customer — there is no cancellation on record in the platform '
+            + 'database or in Stripe, and the subscription remained active.' + usageSentence
+            + ' Cancellation is available at any time from the customer’s Subscription page or by emailing info@domilea.com.');
     }
     if (reason === 'duplicate') {
       fields.duplicate_charge_explanation = clip(
