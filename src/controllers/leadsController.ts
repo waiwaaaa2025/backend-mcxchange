@@ -123,24 +123,24 @@ async function withInsurance<T extends { dotNumber: string }>(rows: T[]) {
 // the per-row /carrier hydration is the slowness culprit. Phone/email live on
 // the LINQ detail record, not /search; the cancellation date is on the row.
 async function hydrateForCsv(rows: LinqCarrierRow[]) {
-  const hydrated = await Promise.all(rows.map(async (c) => {
-    const carrier = (await morproLinqService.getCarrier(String(c.dot_number))) as any;
-    return {
-      ...rowToListShape(c),
-      phone: carrier?.phone || carrier?.cell_phone || null,
-      email: carrier?.email || null,
-    };
-  }));
+  // FMCSA's census is the carrier's own filing and answers for the whole batch in
+  // one query, so it is the number we publish; LINQ is asked only about the rows
+  // the census leaves incomplete.
+  const dots = rows.map((c) => String(c.dot_number));
+  const census = await fmcsaLeadsService.contactsFor(dots);
 
-  // LINQ often has no contact for a carrier; FMCSA's census usually does, and it
-  // costs one query for the whole batch.
-  const missing = hydrated.filter((r) => !r.phone || !r.email).map((r) => r.dotNumber);
-  if (missing.length === 0) return hydrated;
-  const census = await fmcsaLeadsService.contactsFor(missing);
-  return hydrated.map((r) => {
-    const fallback = census.get(r.dotNumber);
-    return fallback ? { ...r, phone: r.phone || fallback.phone, email: r.email || fallback.email } : r;
-  });
+  return Promise.all(rows.map(async (c) => {
+    const dot = String(c.dot_number);
+    const hit = census.get(dot);
+    let phone = hit?.phone || null;
+    let email = hit?.email || null;
+    if (!phone || !email) {
+      const carrier = (await morproLinqService.getCarrier(dot)) as any;
+      phone = phone || carrier?.phone || carrier?.cell_phone || null;
+      email = email || carrier?.email || null;
+    }
+    return { ...rowToListShape(c), phone, email };
+  }));
 }
 
 // GET /api/admin/leads/carriers/search?state=TX&insuranceExpiresWithinDays=30&cursor=…&limit=25

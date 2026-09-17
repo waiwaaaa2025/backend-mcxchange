@@ -160,7 +160,7 @@ async function withContacts<T extends { dotNumber: string; phone: string | null;
   const contacts = await fmcsaLeadsService.contactsFor(rows.map((r) => r.dotNumber));
   return rows.map((row) => {
     const hit = contacts.get(row.dotNumber);
-    return hit ? { ...row, phone: row.phone || hit.phone, email: row.email || hit.email } : row;
+    return hit ? { ...row, phone: hit.phone || row.phone, email: hit.email || row.email } : row;
   });
 }
 
@@ -258,16 +258,18 @@ export async function getCarrierContact(req: AuthRequest, res: Response) {
     return res.status(502).json({ success: false, error: 'Carrier data unavailable' });
   }
 
-  const carrier = (await morproLinqService.getCarrier(dot)) as any;
-  let phone = carrier?.phone || carrier?.cell_phone || null;
-  let email = carrier?.email || null;
+  // FMCSA's census is the carrier's own filing and is what the row already shows,
+  // so it wins; the provider only fills what the census is missing. They disagree
+  // often enough that taking the provider's number would contradict the table.
+  const census = (await fmcsaLeadsService.contactsFor([dot])).get(dot);
+  let phone = census?.phone || null;
+  let email = census?.email || null;
 
-  // The provider often has no contact for a carrier (and sometimes no carrier at
-  // all). FMCSA's census usually does, and it is the same public record.
+  let carrier: any = null;
   if (!phone || !email) {
-    const census = (await fmcsaLeadsService.contactsFor([dot])).get(dot);
-    phone = phone || census?.phone || null;
-    email = email || census?.email || null;
+    carrier = await morproLinqService.getCarrier(dot);
+    phone = phone || carrier?.phone || carrier?.cell_phone || null;
+    email = email || carrier?.email || null;
   }
 
   if (!carrier && !phone && !email) {
@@ -301,9 +303,16 @@ export async function getCarrierContactsBatch(req: AuthRequest, res: Response) {
     MAX_CONTACT_BATCH
   );
 
-  // One carrier failing (or missing at LINQ) must not fail the whole page — those
-  // rows come back with nulls and the UI just shows no contact for them.
-  const results = await mapLimit(dots, 12, async (dot) => {
+  // The census answers for the whole batch in one query and is the source the rows
+  // already show, so it goes first; the provider is only asked about the carriers
+  // it leaves incomplete. One carrier failing there must not fail the whole page —
+  // those rows come back with nulls and the UI shows no contact for them.
+  const census = await fmcsaLeadsService.contactsFor(dots);
+  const gaps = dots.filter((dot) => {
+    const hit = census.get(dot);
+    return !hit?.phone || !hit?.email;
+  });
+  const fromProvider = await mapLimit(gaps, 12, async (dot) => {
     try {
       const c = (await morproLinqService.getCarrier(dot)) as any;
       return { dot, phone: c?.phone || c?.cell_phone || null, email: c?.email || null };
@@ -311,17 +320,15 @@ export async function getCarrierContactsBatch(req: AuthRequest, res: Response) {
       return { dot, phone: null, email: null };
     }
   });
-
-  // One census query fills every row the provider had nothing for.
-  const missing = results.filter((r) => !r.phone || !r.email).map((r) => r.dot);
-  const census = missing.length ? await fmcsaLeadsService.contactsFor(missing) : new Map();
+  const providerByDot = new Map(fromProvider.map((r) => [r.dot, r]));
 
   const contacts: Record<string, { phone: string | null; email: string | null }> = {};
-  for (const r of results) {
-    const fallback = census.get(r.dot);
-    contacts[r.dot] = {
-      phone: r.phone || fallback?.phone || null,
-      email: r.email || fallback?.email || null,
+  for (const dot of dots) {
+    const hit = census.get(dot);
+    const fallback = providerByDot.get(dot);
+    contacts[dot] = {
+      phone: hit?.phone || fallback?.phone || null,
+      email: hit?.email || fallback?.email || null,
     };
   }
 
@@ -600,29 +607,32 @@ export async function exportCsv(req: AuthRequest, res: Response) {
       .slice(0, remaining)
       .map((c) => ({ ...rowFromCarrier(c), phone: '', email: '' }));
 
-    // Enrich this page's rows with phone + email from the per-carrier LINQ detail.
-    const contacts = await mapLimit(rows, 12, async (row) => {
+    // Census first — one query for the page, and the same numbers the table shows.
+    // The provider is only asked about the rows it leaves incomplete.
+    const census = await fmcsaLeadsService.contactsFor(rows.map((row) => String(row.dot_number)));
+    const gapRows = rows.filter((row) => {
+      const hit = census.get(String(row.dot_number));
+      return !hit?.phone || !hit?.email;
+    });
+    const fromProvider = await mapLimit(gapRows, 12, async (row) => {
       try {
         const d = (await morproLinqService.getCarrier(String(row.dot_number))) as any;
-        return { phone: d?.phone || d?.cell_phone || '', email: d?.email || '' };
+        return { dot: String(row.dot_number), phone: d?.phone || d?.cell_phone || '', email: d?.email || '' };
       } catch {
-        return { phone: '', email: '' };
+        return { dot: String(row.dot_number), phone: '', email: '' };
       }
     });
-    // Whatever the provider had no contact for, FMCSA's census usually does — one
-    // query for the page.
-    const missingDots = rows
-      .map((row, idx) => (!contacts[idx].phone || !contacts[idx].email ? String(row.dot_number) : null))
-      .filter((d): d is string => !!d);
-    const census = missingDots.length ? await fmcsaLeadsService.contactsFor(missingDots) : new Map();
+    const providerByDot = new Map(fromProvider.map((r) => [r.dot, r]));
 
     await csvRowsWithInsurance(rows);
 
     let chunk = '';
-    rows.forEach((row, idx) => {
-      const fallback = census.get(String(row.dot_number));
-      row.phone = contacts[idx].phone || fallback?.phone || '';
-      row.email = contacts[idx].email || fallback?.email || '';
+    rows.forEach((row) => {
+      const dot = String(row.dot_number);
+      const hit = census.get(dot);
+      const fallback = providerByDot.get(dot);
+      row.phone = hit?.phone || fallback?.phone || '';
+      row.email = hit?.email || fallback?.email || '';
       chunk += toLine(row) + '\n';
     });
     res.write(chunk);
