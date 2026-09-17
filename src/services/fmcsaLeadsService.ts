@@ -12,11 +12,18 @@
  *              `cancl_effective_date` that makes a carrier a lead.
  * - c5y8-a4uz  Motus Insur    — active/pending policies, used to drop carriers who
  *              already filed replacement coverage.
- * - az4n-8mr2  Company Census — state, fleet size, safety rating, phone.
+ * - az4n-8mr2  Company Census — state, fleet size, safety rating, docket, contact.
  *
  * Socrata can't join datasets, so this pulls the cancellation window once, then
  * filters those DOT numbers against the census file in chunks. Dates are stored
  * as `YYYYMMDD` text, which compares and sorts correctly as a string.
+ *
+ * What the feed can and can't tell us (measured 2026-09-17, 640 leads audited):
+ * FMCSA does not publish cancellations ahead of time. Forward-dated rows are
+ * ~99% TERM/REPL — an insurer swap where coverage never stops — while genuine
+ * `CANCEL` notices barely appear before their effective date (~2/week ahead
+ * against ~500/week behind). So the real product is the carrier who is already
+ * bare: a cancellation that took effect with no replacement policy on file.
  */
 import {
   InsuranceLead,
@@ -45,6 +52,18 @@ const DOT_CHUNK = 150;
 // Chunks run concurrently in small batches so a wide search doesn't burst the API.
 const CHUNK_CONCURRENCY = 4;
 
+// Liability coverage files under 'BIPD', and under 'BIPD CANCELLATION' on a small
+// number of rows; matching only the exact string silently drops those carriers.
+const BIPD_TYPES = `starts_with(ins_type_desc, 'BIPD')`;
+
+const CANCELLATION_SELECT =
+  'usdot_number, docket_number, cancl_effective_date, effective_date, insurance_company_name, policy_no, filing_status_reason';
+
+const CENSUS_SELECT =
+  'dot_number, legal_name, dba_name, phy_state, power_units, safety_rating, phone, email_address, ' +
+  'docket1prefix, docket1, docket1_status_code, docket2prefix, docket2, docket2_status_code, ' +
+  'docket3prefix, docket3, docket3_status_code';
+
 interface CancellationRow {
   usdot_number?: string;
   docket_number?: string;
@@ -52,6 +71,7 @@ interface CancellationRow {
   effective_date?: string;
   insurance_company_name?: string;
   policy_no?: string;
+  filing_status_reason?: string;
 }
 
 interface CensusRow {
@@ -63,6 +83,16 @@ interface CensusRow {
   safety_rating?: string;
   status_code?: string;
   phone?: string;
+  email_address?: string;
+  docket1prefix?: string;
+  docket1?: string;
+  docket1_status_code?: string;
+  docket2prefix?: string;
+  docket2?: string;
+  docket2_status_code?: string;
+  docket3prefix?: string;
+  docket3?: string;
+  docket3_status_code?: string;
 }
 
 interface ActivePolicyRow {
@@ -90,6 +120,72 @@ function isoFromYyyymmdd(value: string): string | null {
 function daysUntil(isoDate: string): number {
   const startOfToday = new Date(new Date().toISOString().slice(0, 10)).getTime();
   return Math.round((new Date(isoDate).getTime() - startOfToday) / 86_400_000);
+}
+
+/** The dockets (MC/FF/MX) the census has for a carrier, in census order. */
+function censusDockets(carrier: CensusRow): Array<{ docket: string; active: boolean }> {
+  const pairs: Array<[string | undefined, string | undefined, string | undefined]> = [
+    [carrier.docket1prefix, carrier.docket1, carrier.docket1_status_code],
+    [carrier.docket2prefix, carrier.docket2, carrier.docket2_status_code],
+    [carrier.docket3prefix, carrier.docket3, carrier.docket3_status_code],
+  ];
+  const out: Array<{ docket: string; active: boolean }> = [];
+  const seen = new Set<string>();
+  for (const [prefix, number, status] of pairs) {
+    const docket = `${(prefix || '').trim()}${(number || '').trim()}`;
+    if (!docket || seen.has(docket)) continue;
+    seen.add(docket);
+    out.push({ docket, active: (status || '').trim().toUpperCase() === 'A' });
+  }
+  return out;
+}
+
+/**
+ * The docket to show. The insurance filing carries its own docket number, which is
+ * sometimes one the carrier no longer holds — DOT 4529207 files under MC1795679
+ * while FMCSA lists it as FF70797 — so the filing's docket is only used when the
+ * census confirms it; otherwise the carrier's own (preferably active) docket wins.
+ */
+function displayDocket(carrier: CensusRow, filingDocket: string): string | null {
+  const dockets = censusDockets(carrier);
+  const filing = filingDocket.trim().toUpperCase();
+  if (filing && dockets.some((d) => d.docket.toUpperCase() === filing)) return filing;
+  const preferred = dockets.find((d) => d.active) || dockets[0];
+  return preferred ? preferred.docket : filing || null;
+}
+
+function formatPhone(value: string | undefined): string | null {
+  const digits = (value || '').replace(/\D/g, '');
+  if (digits.length === 10) return `(${digits.slice(0, 3)}) ${digits.slice(3, 6)}-${digits.slice(6)}`;
+  if (digits.length === 11 && digits.startsWith('1')) return formatPhone(digits.slice(1));
+  return digits ? digits : null;
+}
+
+/**
+ * The cancellation a carrier should be judged on: the soonest one still ahead of
+ * them, or failing that the most recent one already in effect. A carrier can carry
+ * both — an old cancellation they replaced and a fresh one pending — and judging
+ * them on the stale row would test live coverage as though it had already lapsed.
+ */
+function governingCancellation(rows: CancellationRow[], todayStamp: string): CancellationRow | null {
+  let best: CancellationRow | null = null;
+  for (const row of rows) {
+    const stamp = (row.cancl_effective_date || '').trim();
+    if (!stamp) continue;
+    if (!best) {
+      best = row;
+      continue;
+    }
+    const bestStamp = (best.cancl_effective_date || '').trim();
+    const rowUpcoming = stamp >= todayStamp;
+    const bestUpcoming = bestStamp >= todayStamp;
+    if (rowUpcoming !== bestUpcoming) {
+      if (rowUpcoming) best = row;
+    } else if (rowUpcoming ? stamp < bestStamp : stamp > bestStamp) {
+      best = row;
+    }
+  }
+  return best;
 }
 
 async function socrata<T>(dataset: string, params: Record<string, string>, timeoutMs = 20_000): Promise<T[] | null> {
@@ -156,7 +252,7 @@ class FmcsaLeadsService {
     const safety = safetyCode(filters.minSafety);
     // Bump the version whenever the lead rules change so cached lists from the
     // previous rules aren't served for up to an hour after a deploy.
-    const cacheKey = `insurance_leads:fmcsa:v4:${JSON.stringify({
+    const cacheKey = `insurance_leads:fmcsa:v5:${JSON.stringify({
       windowDays,
       state,
       minUnits: filters.minUnits ?? null,
@@ -202,45 +298,23 @@ class FmcsaLeadsService {
   }): Promise<InsuranceLead[] | null> {
     const today = new Date();
     const todayStamp = yyyymmdd(today);
-    const windowEnd = new Date(today.getTime() + windowDays * 86_400_000);
-    const windowStart = new Date(today.getTime() - LAPSED_LOOKBACK_DAYS * 86_400_000);
+    const windowEndStamp = yyyymmdd(new Date(today.getTime() + windowDays * 86_400_000));
+    const windowStartStamp = yyyymmdd(new Date(today.getTime() - LAPSED_LOOKBACK_DAYS * 86_400_000));
 
     // 1. Every BIPD cancellation in the window — recently lapsed as well as upcoming.
-    const cancellations = await socrata<CancellationRow>(DATASET_CANCELLATIONS, {
-      $select: 'usdot_number, docket_number, cancl_effective_date, effective_date, insurance_company_name, policy_no',
-      $where: `ins_type_desc='BIPD' AND cancl_effective_date >= '${yyyymmdd(windowStart)}' AND cancl_effective_date <= '${yyyymmdd(windowEnd)}'`,
-      $order: 'cancl_effective_date ASC',
+    //    This only nominates candidates; which cancellation governs is settled in
+    //    step 3, against the carrier's whole history rather than this slice.
+    const candidates = await socrata<CancellationRow>(DATASET_CANCELLATIONS, {
+      $select: 'usdot_number',
+      $where: `${BIPD_TYPES} AND cancl_effective_date >= '${windowStartStamp}' AND cancl_effective_date <= '${windowEndStamp}'`,
       $limit: '50000',
     });
-    if (!cancellations) return null;
+    if (!candidates) return null;
 
-    // One cancellation per carrier: the soonest one still ahead of them, or failing
-    // that the most recent one already in effect. A carrier can carry both — an old
-    // cancellation they replaced and a fresh one pending — and judging them on the
-    // stale row would test live coverage as though it had already lapsed.
-    const soonest = new Map<string, CancellationRow>();
-    for (const row of cancellations) {
-      const dot = (row.usdot_number || '').trim();
-      const stamp = (row.cancl_effective_date || '').trim();
-      if (!dot || !stamp) continue;
-
-      const current = soonest.get(dot);
-      if (!current) {
-        soonest.set(dot, row);
-        continue;
-      }
-
-      const currentStamp = (current.cancl_effective_date || '').trim();
-      const rowUpcoming = stamp >= todayStamp;
-      const currentUpcoming = currentStamp >= todayStamp;
-
-      if (rowUpcoming !== currentUpcoming) {
-        if (rowUpcoming) soonest.set(dot, row);
-      } else if (rowUpcoming ? stamp < currentStamp : stamp > currentStamp) {
-        soonest.set(dot, row);
-      }
-    }
-    if (soonest.size === 0) return [];
+    const candidateDots = Array.from(
+      new Set(candidates.map((row) => (row.usdot_number || '').trim()).filter(Boolean))
+    );
+    if (candidateDots.length === 0) return [];
 
     // 2. Census lookup carries the state / fleet / safety filters, so filtering
     //    happens in the query rather than through a profile call per row.
@@ -250,9 +324,9 @@ class FmcsaLeadsService {
     if (filters.maxUnits != null) censusWhere.push(`(power_units::number) <= ${Number(filters.maxUnits)}`);
     if (safety) censusWhere.push(`safety_rating='${safety}'`);
 
-    const census = await overDotChunks<CensusRow>(Array.from(soonest.keys()), (chunk) =>
+    const census = await overDotChunks<CensusRow>(candidateDots, (chunk) =>
       socrata<CensusRow>(DATASET_CENSUS, {
-        $select: 'dot_number, legal_name, dba_name, phy_state, power_units, safety_rating, phone',
+        $select: CENSUS_SELECT,
         $where: [...censusWhere, `dot_number in (${quoteList(chunk)})`].join(' AND '),
         $limit: String(DOT_CHUNK * 4),
       })
@@ -262,12 +336,36 @@ class FmcsaLeadsService {
     const carriers = new Map<string, CensusRow>();
     for (const row of census) {
       const dot = (row.dot_number || '').trim();
-      if (dot) carriers.set(dot, row);
+      if (!dot) continue;
+      // A carrier whose every operating authority is inactive can't be sold a policy
+      // to keep running — they have nothing left to insure.
+      const dockets = censusDockets(row);
+      if (dockets.length > 0 && !dockets.some((d) => d.active)) continue;
+      carriers.set(dot, row);
     }
     if (carriers.size === 0) return [];
 
-    // 3. A carrier that already filed replacement coverage isn't a lead — most
-    //    upcoming cancellations are insurer switches (TERM/REPL), not lapses.
+    // 3. The carrier's full cancellation history, not just the window: a carrier with
+    //    a cancellation past the window edge would otherwise be judged on an older,
+    //    already-replaced one and reported as lapsed while still insured.
+    const history = await overDotChunks<CancellationRow>(Array.from(carriers.keys()), (chunk) =>
+      socrata<CancellationRow>(DATASET_CANCELLATIONS, {
+        $select: CANCELLATION_SELECT,
+        $where: `${BIPD_TYPES} AND usdot_number in (${quoteList(chunk)})`,
+        $limit: '50000',
+      })
+    );
+    if (!history) return null;
+
+    const historyByDot = new Map<string, CancellationRow[]>();
+    for (const row of history) {
+      const dot = (row.usdot_number || '').trim();
+      if (!dot) continue;
+      if (!historyByDot.has(dot)) historyByDot.set(dot, []);
+      historyByDot.get(dot)!.push(row);
+    }
+
+    // 4. What the carrier has on file right now.
     const activePolicies = await overDotChunks<ActivePolicyRow>(Array.from(carriers.keys()), (chunk) =>
       socrata<ActivePolicyRow>(DATASET_ACTIVE_POLICIES, {
         $select: 'usdot_number, policy_no, effective_date, trans_date',
@@ -287,49 +385,49 @@ class FmcsaLeadsService {
 
     const leads: InsuranceLead[] = [];
     for (const [dot, carrier] of carriers) {
-      const cancellation = soonest.get(dot);
+      const cancellation = governingCancellation(historyByDot.get(dot) || [], todayStamp);
       if (!cancellation) continue;
 
       const cancelStamp = (cancellation.cancl_effective_date || '').trim();
+      // Their live cancellation may sit outside the window the buyer asked about.
+      if (cancelStamp < windowStartStamp || cancelStamp > windowEndStamp) continue;
+
+      const lapsed = cancelStamp < todayStamp;
       const activeRows = activeByDot.get(dot) || [];
-      const lapsed = !!cancelStamp && cancelStamp < todayStamp;
+      const cancellingPolicy = normalizePolicy(cancellation.policy_no);
+      const hasAnyPolicy = activeRows.some((policy) => normalizePolicy(policy.policy_no));
+      const hasOtherPolicy = activeRows.some((policy) => {
+        const active = normalizePolicy(policy.policy_no);
+        return !!active && active !== cancellingPolicy;
+      });
+      const reason = (cancellation.filing_status_reason || '').trim().toUpperCase();
 
       if (lapsed) {
         // Cancellation already took effect: a lead only while nothing replaced it.
         // Any BIPD policy on file means they re-insured.
-        if (activeRows.some((policy) => normalizePolicy(policy.policy_no))) continue;
+        if (hasAnyPolicy) continue;
+      } else if (reason === 'CANCEL') {
+        // A live notice of cancellation — the insurer is walking away and nothing
+        // has taken over. The cancelled policy is still on file until the date
+        // passes, so only a *different* active policy means they're covered.
+        if (hasOtherPolicy) continue;
       } else {
-        // Coverage counts as replaced when the carrier has an active BIPD policy that is
-        // either a different policy, or the same policy filed again after the cancelled
-        // one took effect — by a later effective date or a later transaction date.
-        // FMCSA supersedes a pending cancellation by re-filing the same policy number
-        // (sometimes keeping the original effective date, so only trans_date moves) and
-        // leaves the stale cancellation row behind. Confirmed on motus.dot.gov for DOTs
-        // 3141380 (MC99414), 1116622 (MC456935), 4428380 and 4025882 — all show active
-        // coverage with no pending cancellation.
-        const cancellingPolicy = normalizePolicy(cancellation.policy_no);
-        const cancellingEffective = (cancellation.effective_date || '').trim();
-        const hasReplacement = activeRows.some((policy) => {
-          const active = normalizePolicy(policy.policy_no);
-          if (!active) return false;
-          if (active !== cancellingPolicy) return true;
-          if (!cancellingEffective) return false;
-          const effective = (policy.effective_date || '').trim();
-          const filed = (policy.trans_date || '').trim();
-          return (!!effective && effective > cancellingEffective) || (!!filed && filed > cancellingEffective);
-        });
-        if (hasReplacement) continue;
+        // TERM/REPL and friends mean the filing was replaced, not that coverage
+        // stops. FMCSA re-files the same policy number and leaves the old row
+        // behind, so any policy on file means this cancellation is bookkeeping.
+        if (hasAnyPolicy) continue;
       }
 
-      const expiry = isoFromYyyymmdd(cancellation.cancl_effective_date || '');
-      const docket = (cancellation.docket_number || '').trim();
+      const expiry = isoFromYyyymmdd(cancelStamp);
       leads.push({
         dotNumber: dot,
-        mcNumber: docket || null,
+        mcNumber: displayDocket(carrier, (cancellation.docket_number || '').trim()),
         legalName: carrier.legal_name || carrier.dba_name || `DOT ${dot}`,
         state: carrier.phy_state || null,
         powerUnits: carrier.power_units != null ? Number(carrier.power_units) : null,
         safetyRating: safetyLabel(carrier.safety_rating),
+        phone: formatPhone(carrier.phone),
+        email: (carrier.email_address || '').trim() || null,
         insuranceStatus: 'pending',
         insuranceExpiryDate: expiry,
         daysUntilExpiry: expiry ? daysUntil(expiry) : null,

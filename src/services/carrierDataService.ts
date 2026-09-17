@@ -432,6 +432,9 @@ class CarrierDataService {
             state: row.state,
             powerUnits: row.power_units,
             safetyRating: safetyLabel(row.safety_rating),
+            // LINQ's search rows carry no contact details; the FMCSA path fills these.
+            phone: null,
+            email: null,
             insuranceStatus: 'pending',
             insuranceExpiryDate: cancelDate,
             daysUntilExpiry: cancelDate ? daysUntil(cancelDate) : null,

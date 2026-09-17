@@ -36,6 +36,9 @@ export interface InsuranceLead {
   state: string | null;
   powerUnits: number | null;
   safetyRating: string | null;
+  // Public FMCSA census contact for the carrier — null when the census has none.
+  phone: string | null;
+  email: string | null;
   insuranceStatus: 'pending' | 'expiring';
   insuranceExpiryDate: string | null;
   daysUntilExpiry: number | null;
