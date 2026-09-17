@@ -26,7 +26,24 @@ export interface InsuranceLeadFilters {
   minUnits?: number;
   maxUnits?: number;
   minSafety?: string;
+  // Prospecting filters the Leads / Lead Generator tools pass through.
+  nameContains?: string;
+  addedAfter?: string;   // YYYY-MM-DD or YYYYMMDD
+  addedBefore?: string;  // YYYY-MM-DD or YYYYMMDD
   sort?: string;
+}
+
+/** What FMCSA says about one carrier's liability coverage right now. */
+export interface InsuranceSnapshot {
+  status: 'COVERAGE_LAPSED' | 'CANCELLATION_SCHEDULED' | 'COVERED';
+  cancellationDate: string | null;   // ISO; null unless a cancellation actually bites
+  daysUntilCancellation: number | null;
+}
+
+/** Public FMCSA census contact for a carrier. */
+export interface CarrierContact {
+  phone: string | null;
+  email: string | null;
 }
 
 export interface InsuranceLead {

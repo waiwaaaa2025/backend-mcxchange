@@ -8,6 +8,8 @@ import morproLinqService, {
   type LinqSearchFilters,
   type LinqSearchResult,
 } from '../services/morproLinqService';
+import fmcsaLeadsService from '../services/fmcsaLeadsService';
+import type { InsuranceLead, InsuranceLeadFilters } from '../types/carrierData';
 import { getLeadGeneratorAccess } from '../services/entitlementService';
 import logger from '../utils/logger';
 
@@ -95,6 +97,8 @@ function buildLinqFilters(q: Record<string, unknown>): LinqSearchFilters {
 }
 
 // Map a raw LINQ carrier record to the light row shape we return to the client.
+// Insurance is filled in from FMCSA afterwards — never from the LINQ row, whose
+// insurance summary lists policies on file without applying their cancellations.
 function toRow(c: any) {
   return {
     dotNumber: String(c.dot_number),
@@ -105,7 +109,55 @@ function toRow(c: any) {
     totalDrivers: c.drivers || null,
     authorityStatus: c.status,
     safetyRating: safetyLabel(c.safety_rating),
+    insuranceCancellationDate: null as string | null,
+    insuranceStatus: null as string | null,
   };
+}
+
+// An insurance search can't go to LINQ: probed live, its `insurance_cancels_*`
+// filter returns a fraction of what FMCSA itself lists (3 against 112 for Illinois
+// in a 30-day window). Insurance searches run against FMCSA's feed — the same code
+// behind the Insurance Leads tool — so a subscriber sees the same carriers there.
+function insuranceFiltersFrom(q: Record<string, unknown>): InsuranceLeadFilters {
+  return {
+    expiringWithinDays: parseInt10(q.insuranceExpiresWithinDays, 30),
+    state: q.state ? String(q.state).toUpperCase() : undefined,
+    minUnits: q.minFleet ? parseInt10(q.minFleet, 0) : undefined,
+    maxUnits: q.maxFleet ? parseInt10(q.maxFleet, Number.MAX_SAFE_INTEGER) : undefined,
+    minSafety: q.safetyRating ? String(q.safetyRating) : undefined,
+    nameContains: q.name ? String(q.name) : undefined,
+    addedAfter: q.addedAfter ? String(q.addedAfter) : undefined,
+    addedBefore: q.addedBefore ? String(q.addedBefore) : undefined,
+  };
+}
+
+function leadToRow(l: InsuranceLead) {
+  return {
+    dotNumber: l.dotNumber,
+    legalName: l.legalName,
+    dba: null,
+    state: l.state,
+    totalPowerUnits: l.powerUnits,
+    totalDrivers: null,
+    // FMCSA lead rows are active carriers with an active operating authority.
+    authorityStatus: 'ACTIVE',
+    safetyRating: l.safetyRating,
+    insuranceCancellationDate: l.insuranceExpiryDate,
+    insuranceStatus: l.pendingReason,
+  };
+}
+
+// Two FMCSA queries for a whole page of rows — never one per carrier.
+async function withInsurance<T extends { dotNumber: string }>(rows: T[]) {
+  const snapshots = await fmcsaLeadsService.insuranceStatusFor(rows.map((r) => r.dotNumber));
+  return rows.map((row) => {
+    const snap = snapshots?.get(row.dotNumber);
+    return {
+      ...row,
+      insuranceCancellationDate: snap?.cancellationDate ?? null,
+      insuranceStatus: snap?.status ?? null,
+    };
+  });
 }
 
 // GET /api/lead-generator/search
@@ -116,6 +168,30 @@ export async function searchCarriers(req: AuthRequest, res: Response) {
   const limit = Math.min(50, Math.max(1, parseInt10(req.query.limit, 25)));
 
   const allowedRaw = filterByTier(req.query as Record<string, unknown>, tier);
+
+  // Insurance search → FMCSA, which actually carries the cancellations.
+  if (allowedRaw.insuranceExpiresWithinDays) {
+    const leads = await fmcsaLeadsService.searchInsuranceLeads(
+      insuranceFiltersFrom(allowedRaw),
+      cursor ?? null,
+      limit
+    );
+    if (!leads) {
+      return res.status(502).json({ success: false, error: 'Carrier search unavailable' });
+    }
+    return res.json({
+      success: true,
+      data: {
+        carriers: leads.results.map(leadToRow),
+        limit: leads.limit,
+        hasMore: leads.hasMore,
+        nextCursor: leads.nextCursor,
+        total: leads.total,
+        tier,
+      },
+    });
+  }
+
   const userFilters = buildLinqFilters(allowedRaw);
   const filters: LinqSearchFilters = {
     ...(Object.keys(userFilters).length === 0 ? { status: 'ACTIVE' } : userFilters),
@@ -137,7 +213,7 @@ export async function searchCarriers(req: AuthRequest, res: Response) {
     const row = toRow(c);
     if (!byDot.has(row.dotNumber)) byDot.set(row.dotNumber, row);
   }
-  const carriers = [...byDot.values()];
+  const carriers = await withInsurance([...byDot.values()]);
 
   res.json({
     success: true,
@@ -166,18 +242,22 @@ export async function getCarrierContact(req: AuthRequest, res: Response) {
   }
 
   const carrier = (await morproLinqService.getCarrier(dot)) as any;
-  if (!carrier) {
+  let phone = carrier?.phone || carrier?.cell_phone || null;
+  let email = carrier?.email || null;
+
+  // The provider often has no contact for a carrier (and sometimes no carrier at
+  // all). FMCSA's census usually does, and it is the same public record.
+  if (!phone || !email) {
+    const census = (await fmcsaLeadsService.contactsFor([dot])).get(dot);
+    phone = phone || census?.phone || null;
+    email = email || census?.email || null;
+  }
+
+  if (!carrier && !phone && !email) {
     return res.status(404).json({ success: false, error: 'Carrier not found' });
   }
 
-  res.json({
-    success: true,
-    data: {
-      dotNumber: dot,
-      phone: carrier.phone || carrier.cell_phone || null,
-      email: carrier.email || null,
-    },
-  });
+  res.json({ success: true, data: { dotNumber: dot, phone, email } });
 }
 
 // POST /api/lead-generator/contacts — phone/email for a batch of DOTs.
@@ -215,9 +295,17 @@ export async function getCarrierContactsBatch(req: AuthRequest, res: Response) {
     }
   });
 
+  // One census query fills every row the provider had nothing for.
+  const missing = results.filter((r) => !r.phone || !r.email).map((r) => r.dot);
+  const census = missing.length ? await fmcsaLeadsService.contactsFor(missing) : new Map();
+
   const contacts: Record<string, { phone: string | null; email: string | null }> = {};
   for (const r of results) {
-    contacts[r.dot] = { phone: r.phone, email: r.email };
+    const fallback = census.get(r.dot);
+    contacts[r.dot] = {
+      phone: r.phone || fallback?.phone || null,
+      email: r.email || fallback?.email || null,
+    };
   }
 
   res.json({ success: true, data: { contacts } });
@@ -297,6 +385,8 @@ const BASE_CSV_COLUMNS = [
   'total_drivers',
   'authority_status',
   'safety_rating',
+  'insurance_cancellation_date',
+  'insurance_status',
 ];
 
 function rowFromCarrier(c: any): Record<string, unknown> {
@@ -309,7 +399,39 @@ function rowFromCarrier(c: any): Record<string, unknown> {
     total_drivers: c.drivers || '',
     authority_status: c.status,
     safety_rating: safetyLabel(c.safety_rating),
+    insurance_cancellation_date: '',
+    insurance_status: '',
   };
+}
+
+function rowFromLead(l: InsuranceLead): Record<string, unknown> {
+  return {
+    dot_number: l.dotNumber,
+    legal_name: l.legalName,
+    dba: '',
+    state: l.state,
+    total_power_units: l.powerUnits,
+    total_drivers: '',
+    authority_status: 'ACTIVE',
+    safety_rating: l.safetyRating,
+    insurance_cancellation_date: l.insuranceExpiryDate || '',
+    insurance_status: l.pendingReason || '',
+    phone: l.phone || '',
+    email: l.email || '',
+  };
+}
+
+// Fill a page of CSV rows with the real FMCSA insurance verdict — one lookup for
+// the page, not per row.
+async function csvRowsWithInsurance(rows: Array<Record<string, unknown>>) {
+  const snapshots = await fmcsaLeadsService.insuranceStatusFor(rows.map((r) => String(r.dot_number)));
+  if (!snapshots) return rows;
+  for (const row of rows) {
+    const snap = snapshots.get(String(row.dot_number));
+    row.insurance_cancellation_date = snap?.cancellationDate || '';
+    row.insurance_status = snap?.status || '';
+  }
+  return rows;
 }
 
 // GET /api/lead-generator/export.csv — available to any Lead Generator tier.
@@ -337,10 +459,47 @@ export async function exportCsv(req: AuthRequest, res: Response) {
   };
   const toLine = (r: Record<string, unknown>) => headers.map((h) => escape(r[h])).join(',');
 
+  const cursorParam = req.query.cursor ? String(req.query.cursor) : undefined;
+
+  // Insurance export comes from FMCSA, like the search does. Its rows carry the
+  // census phone/email already, so the broker tier needs no per-carrier calls.
+  if (allowedRaw.insuranceExpiresWithinDays) {
+    const insuranceFilters = insuranceFiltersFrom(allowedRaw);
+    const maxLeadRows = isBrokerTier ? Math.min(5000, Math.max(1, parseInt10(req.query.limit, 1000))) : 25;
+    const rows: Array<Record<string, unknown>> = [];
+    let leadCursor: string | null = isBrokerTier ? null : cursorParam ?? null;
+    do {
+      const page = await fmcsaLeadsService.searchInsuranceLeads(
+        insuranceFilters,
+        leadCursor,
+        isBrokerTier ? 50 : 25
+      );
+      if (!page) {
+        return res.status(502).json({ success: false, error: 'Carrier search unavailable' });
+      }
+      rows.push(...page.results.map(rowFromLead));
+      leadCursor = isBrokerTier ? page.nextCursor : null;
+    } while (leadCursor && rows.length < maxLeadRows);
+
+    if (rows.length === 0) {
+      return res
+        .status(404)
+        .json({ success: false, error: 'No carriers matched those filters. Try widening them.' });
+    }
+    const lines = [headers.join(',')];
+    for (const row of rows.slice(0, maxLeadRows)) lines.push(toLine(row));
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader(
+      'Content-Disposition',
+      `attachment; filename="lead-generator-${new Date().toISOString().slice(0, 10)}.csv"`
+    );
+    return res.send(lines.join('\n'));
+  }
+
   if (!isBrokerTier) {
     // Buyer: just the page they're viewing (25 rows). Fast enough to buffer, and
     // fetching first lets us still return a clean 502 if the search backend is down.
-    const cursor = req.query.cursor ? String(req.query.cursor) : undefined;
+    const cursor = cursorParam;
     const result = await morproLinqService.searchCarriersFiltered(
       { ...baseFilters, limit: 25, ...(cursor ? { cursor } : {}) },
       { minRows: 25 }
@@ -354,7 +513,8 @@ export async function exportCsv(req: AuthRequest, res: Response) {
         .json({ success: false, error: 'No carriers matched those filters. Try widening them.' });
     }
     const lines = [headers.join(',')];
-    for (const c of (result.carriers || []).slice(0, 25)) lines.push(toLine(rowFromCarrier(c)));
+    const pageRows = await csvRowsWithInsurance((result.carriers || []).slice(0, 25).map(rowFromCarrier));
+    for (const row of pageRows) lines.push(toLine(row));
     res.setHeader('Content-Type', 'text/csv; charset=utf-8');
     res.setHeader(
       'Content-Disposition',
@@ -424,11 +584,20 @@ export async function exportCsv(req: AuthRequest, res: Response) {
         return { phone: '', email: '' };
       }
     });
+    // Whatever the provider had no contact for, FMCSA's census usually does — one
+    // query for the page.
+    const missingDots = rows
+      .map((row, idx) => (!contacts[idx].phone || !contacts[idx].email ? String(row.dot_number) : null))
+      .filter((d): d is string => !!d);
+    const census = missingDots.length ? await fmcsaLeadsService.contactsFor(missingDots) : new Map();
+
+    await csvRowsWithInsurance(rows);
 
     let chunk = '';
     rows.forEach((row, idx) => {
-      row.phone = contacts[idx].phone;
-      row.email = contacts[idx].email;
+      const fallback = census.get(String(row.dot_number));
+      row.phone = contacts[idx].phone || fallback?.phone || '';
+      row.email = contacts[idx].email || fallback?.email || '';
       chunk += toLine(row) + '\n';
     });
     res.write(chunk);

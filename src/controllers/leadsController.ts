@@ -7,6 +7,8 @@ import morproLinqService, {
   type LinqSearchFilters,
   type LinqCarrierRow,
 } from '../services/morproLinqService';
+import fmcsaLeadsService from '../services/fmcsaLeadsService';
+import type { InsuranceLead, InsuranceLeadFilters } from '../types/carrierData';
 import { logLeadActivity, type LeadActivityKind } from '../services/leadActivity.service';
 import logger from '../utils/logger';
 
@@ -45,12 +47,10 @@ function buildLinqFilters(q: Request['query']): LinqSearchFilters {
   return f;
 }
 
-// Map a LINQ search row to the list-page shape — no extra HTTP calls. Search rows
-// carry insurance_summary, so the cancellation date comes along for free.
-function rowToListShape(
-  c: LinqCarrierRow,
-  insuranceCancel: string | null = c.insurance_summary?.earliest_cancellation_date ?? null
-) {
+// Map a LINQ search row to the list-page shape — no extra HTTP calls. The row's own
+// insurance_summary is deliberately ignored: it reports policies on file without
+// applying their cancellations, so the date comes from FMCSA in withInsurance().
+function rowToListShape(c: LinqCarrierRow, insuranceCancel: string | null = null) {
   return {
     dotNumber: String(c.dot_number),
     legalName: c.legal_name,
@@ -64,11 +64,66 @@ function rowToListShape(
   };
 }
 
+// The insurance filter can't be served by LINQ: probed live, its
+// `insurance_cancels_*` search returns a tiny fraction of the carriers FMCSA
+// itself lists (3 vs 112 for Illinois in a 30-day window), and its per-row
+// insurance summary ignores cancellations altogether. When the user asks for
+// insurance, the search runs against FMCSA's own feed instead — the same code
+// behind the Insurance Leads tool, so both tools agree.
+function insuranceFiltersFrom(q: Request['query']): InsuranceLeadFilters {
+  return {
+    expiringWithinDays: parseInt10(q.insuranceExpiresWithinDays, 30),
+    state: q.state ? String(q.state).toUpperCase() : undefined,
+    minUnits: q.minFleet ? parseInt10(q.minFleet, 0) : undefined,
+    maxUnits: q.maxFleet ? parseInt10(q.maxFleet, Number.MAX_SAFE_INTEGER) : undefined,
+    minSafety: q.safetyRating ? String(q.safetyRating) : undefined,
+    nameContains: q.name ? String(q.name) : undefined,
+    addedAfter: q.addedAfter ? String(q.addedAfter) : undefined,
+    addedBefore: q.addedBefore ? String(q.addedBefore) : undefined,
+  };
+}
+
+// FMCSA lead → the same list shape LINQ rows map to. Contact comes free with the
+// census row, so these rows don't need the per-carrier hydration LINQ needs.
+function leadToListShape(l: InsuranceLead) {
+  return {
+    dotNumber: l.dotNumber,
+    legalName: l.legalName,
+    dba: null,
+    state: l.state,
+    totalPowerUnits: l.powerUnits,
+    totalDrivers: null,
+    // The FMCSA lead search only ever returns carriers whose census record and
+    // operating authority are both active.
+    authorityStatus: 'ACTIVE',
+    safetyRating: l.safetyRating,
+    insuranceCancellationDate: l.insuranceExpiryDate,
+    insuranceStatus: l.pendingReason,
+    phone: l.phone,
+    email: l.email,
+  };
+}
+
+// Attach the real insurance verdict to a page of LINQ rows: two FMCSA queries for
+// the whole page, never one per row. LINQ's own insurance summary is stale, so a
+// row shows nothing rather than a date FMCSA no longer stands behind.
+async function withInsurance<T extends { dotNumber: string }>(rows: T[]) {
+  const snapshots = await fmcsaLeadsService.insuranceStatusFor(rows.map((r) => r.dotNumber));
+  return rows.map((row) => {
+    const snap = snapshots?.get(row.dotNumber);
+    return {
+      ...row,
+      insuranceCancellationDate: snap?.cancellationDate ?? null,
+      insuranceStatus: snap?.status ?? null,
+    };
+  });
+}
+
 // Used by CSV export (small, bounded). NEVER use on the list page —
 // the per-row /carrier hydration is the slowness culprit. Phone/email live on
 // the LINQ detail record, not /search; the cancellation date is on the row.
 async function hydrateForCsv(rows: LinqCarrierRow[]) {
-  return Promise.all(rows.map(async (c) => {
+  const hydrated = await Promise.all(rows.map(async (c) => {
     const carrier = (await morproLinqService.getCarrier(String(c.dot_number))) as any;
     return {
       ...rowToListShape(c),
@@ -76,6 +131,16 @@ async function hydrateForCsv(rows: LinqCarrierRow[]) {
       email: carrier?.email || null,
     };
   }));
+
+  // LINQ often has no contact for a carrier; FMCSA's census usually does, and it
+  // costs one query for the whole batch.
+  const missing = hydrated.filter((r) => !r.phone || !r.email).map((r) => r.dotNumber);
+  if (missing.length === 0) return hydrated;
+  const census = await fmcsaLeadsService.contactsFor(missing);
+  return hydrated.map((r) => {
+    const fallback = census.get(r.dotNumber);
+    return fallback ? { ...r, phone: r.phone || fallback.phone, email: r.email || fallback.email } : r;
+  });
 }
 
 // GET /api/admin/leads/carriers/search?state=TX&insuranceExpiresWithinDays=30&cursor=…&limit=25
@@ -83,6 +148,26 @@ export async function searchCarriers(req: Request, res: Response) {
   // LINQ pages by cursor (it ignores `page`) and rejects limit > 50.
   const cursor = req.query.cursor ? String(req.query.cursor) : undefined;
   const limit = Math.min(50, Math.max(1, parseInt10(req.query.limit, 25)));
+
+  // An insurance search goes to FMCSA, which actually has the cancellations.
+  if (req.query.insuranceExpiresWithinDays) {
+    const insuranceFilters = insuranceFiltersFrom(req.query);
+    const leads = await fmcsaLeadsService.searchInsuranceLeads(insuranceFilters, cursor ?? null, limit);
+    if (!leads) {
+      return res.status(502).json({ success: false, error: 'Insurance lead search unavailable' });
+    }
+    return res.json({
+      success: true,
+      data: {
+        carriers: leads.results.map(leadToListShape),
+        limit: leads.limit,
+        hasMore: leads.hasMore,
+        nextCursor: leads.nextCursor,
+        total: leads.total,
+        insuranceHorizon: isoDateOffset(insuranceFilters.expiringWithinDays ?? 30),
+      },
+    });
+  }
 
   // Default to status:ACTIVE for prospecting when no filter is set.
   const userFilters = buildLinqFilters(req.query);
@@ -96,14 +181,10 @@ export async function searchCarriers(req: Request, res: Response) {
     return res.status(502).json({ success: false, error: 'LINQ search unavailable' });
   }
 
-  // No per-row hydration — search response only (it already includes the
-  // insurance cancellation date). Safety rating, and status when combined with
-  // state, are matched on our side — see splitLocalFilters.
-  const carriers = result.carriers.map((c) => rowToListShape(c));
-
-  // Echo back the active insurance horizon so the UI can show a banner like
-  // "Showing carriers with insurance expiring by YYYY-MM-DD"
-  const insuranceHorizon = filters.insurance_cancels_before || null;
+  // No per-row hydration — search response only. Safety rating, and status when
+  // combined with state, are matched on our side — see splitLocalFilters. The
+  // insurance column is filled from FMCSA for the page as a whole.
+  const carriers = await withInsurance(result.carriers.map((c) => rowToListShape(c)));
 
   res.json({
     success: true,
@@ -112,7 +193,7 @@ export async function searchCarriers(req: Request, res: Response) {
       limit,
       hasMore: result.hasMore,
       nextCursor: result.nextCursor != null ? String(result.nextCursor) : null,
-      insuranceHorizon,
+      insuranceHorizon: null,
     },
   });
 }
@@ -149,6 +230,24 @@ export async function getCarrierDetail(req: Request, res: Response) {
 // Paginates LINQ search up to maxRows total, hydrates each row in parallel batches.
 export async function exportCarriersCsv(req: Request, res: Response) {
   const maxRows = Math.min(1000, Math.max(1, parseInt10(req.query.limit, 200)));
+
+  // Insurance export comes from FMCSA, like the search does, and its rows already
+  // carry the census phone/email — no per-carrier hydration needed.
+  if (req.query.insuranceExpiresWithinDays) {
+    const insuranceFilters = insuranceFiltersFrom(req.query);
+    const rows: ReturnType<typeof leadToListShape>[] = [];
+    let leadCursor: string | null = null;
+    do {
+      const page = await fmcsaLeadsService.searchInsuranceLeads(insuranceFilters, leadCursor, 50);
+      if (!page) {
+        return res.status(502).json({ success: false, error: 'Insurance lead search unavailable' });
+      }
+      rows.push(...page.results.map(leadToListShape));
+      leadCursor = page.nextCursor;
+    } while (leadCursor && rows.length < maxRows);
+    return sendCarriersCsv(res, rows.slice(0, maxRows));
+  }
+
   // Safety (and status alongside state) can't go to LINQ — match rows here.
   const { linq: baseFilters, matches, hasLocal } = splitLocalFilters(buildLinqFilters(req.query));
 
@@ -179,9 +278,22 @@ export async function exportCarriersCsv(req: Request, res: Response) {
     cursor = result.next_cursor;
   }
 
+  return sendCarriersCsv(res, await withInsurance(collected));
+}
+
+function sendCarriersCsv(
+  res: Response,
+  rows: Array<{
+    dotNumber: string; legalName: string | null; dba: string | null; state: string | null;
+    totalPowerUnits: number | null; totalDrivers: number | null; authorityStatus: string | null;
+    safetyRating: string | null; insuranceCancellationDate: string | null;
+    insuranceStatus?: string | null; phone: string | null; email: string | null;
+  }>
+) {
   const csvHeaders = [
     'dot_number', 'legal_name', 'dba', 'state', 'total_power_units', 'total_drivers',
-    'authority_status', 'safety_rating', 'insurance_cancellation_date', 'phone', 'email',
+    'authority_status', 'safety_rating', 'insurance_cancellation_date', 'insurance_status',
+    'phone', 'email',
   ];
   const escape = (v: unknown) => {
     if (v == null) return '';
@@ -189,10 +301,11 @@ export async function exportCarriersCsv(req: Request, res: Response) {
     return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
   };
   const lines = [csvHeaders.join(',')];
-  for (const r of collected) {
+  for (const r of rows) {
     lines.push([
       r.dotNumber, r.legalName, r.dba, r.state, r.totalPowerUnits, r.totalDrivers,
-      r.authorityStatus, r.safetyRating, r.insuranceCancellationDate, r.phone, r.email,
+      r.authorityStatus, r.safetyRating, r.insuranceCancellationDate, r.insuranceStatus ?? null,
+      r.phone, r.email,
     ].map(escape).join(','));
   }
 

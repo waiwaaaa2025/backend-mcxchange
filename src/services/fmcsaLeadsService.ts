@@ -26,9 +26,11 @@
  * bare: a cancellation that took effect with no replacement policy on file.
  */
 import {
+  CarrierContact,
   InsuranceLead,
   InsuranceLeadFilters,
   InsuranceLeadsResult,
+  InsuranceSnapshot,
 } from '../types/carrierData';
 import cacheService from './cacheService';
 import { safetyLabel, safetyCode } from './morproLinqService';
@@ -60,7 +62,7 @@ const CANCELLATION_SELECT =
   'usdot_number, docket_number, cancl_effective_date, effective_date, insurance_company_name, policy_no, filing_status_reason';
 
 const CENSUS_SELECT =
-  'dot_number, legal_name, dba_name, phy_state, power_units, safety_rating, phone, email_address, ' +
+  'dot_number, legal_name, dba_name, phy_state, power_units, safety_rating, phone, email_address, add_date, ' +
   'docket1prefix, docket1, docket1_status_code, docket2prefix, docket2, docket2_status_code, ' +
   'docket3prefix, docket3, docket3_status_code';
 
@@ -161,6 +163,12 @@ function formatPhone(value: string | undefined): string | null {
   return digits ? digits : null;
 }
 
+/** Accepts YYYY-MM-DD or YYYYMMDD; returns the YYYYMMDD Socrata stores. */
+function toStamp(value: string | undefined): string | null {
+  const digits = (value || '').replace(/-/g, '').trim();
+  return /^\d{8}$/.test(digits) ? digits : null;
+}
+
 /**
  * The cancellation a carrier should be judged on: the soonest one still ahead of
  * them, or failing that the most recent one already in effect. A carrier can carry
@@ -186,6 +194,40 @@ function governingCancellation(rows: CancellationRow[], todayStamp: string): Can
     }
   }
   return best;
+}
+
+/**
+ * Whether this cancellation actually leaves the carrier bare. The same test backs
+ * the Insurance Leads list and the insurance column in Leads / Lead Generator, so
+ * one carrier can never read as lapsed in one tool and covered in another.
+ */
+function verdict(
+  cancellation: CancellationRow,
+  activeRows: ActivePolicyRow[],
+  todayStamp: string
+): InsuranceSnapshot['status'] {
+  const cancelStamp = (cancellation.cancl_effective_date || '').trim();
+  if (!cancelStamp) return 'COVERED';
+
+  const cancellingPolicy = normalizePolicy(cancellation.policy_no);
+  const hasAnyPolicy = activeRows.some((policy) => normalizePolicy(policy.policy_no));
+  const hasOtherPolicy = activeRows.some((policy) => {
+    const active = normalizePolicy(policy.policy_no);
+    return !!active && active !== cancellingPolicy;
+  });
+  const reason = (cancellation.filing_status_reason || '').trim().toUpperCase();
+
+  if (cancelStamp < todayStamp) {
+    // Cancellation already took effect: bare only while nothing replaced it.
+    return hasAnyPolicy ? 'COVERED' : 'COVERAGE_LAPSED';
+  }
+  if (reason === 'CANCEL') {
+    // A live notice of cancellation. The cancelled policy stays on file until the
+    // date passes, so only a *different* active policy means they're covered.
+    return hasOtherPolicy ? 'COVERED' : 'CANCELLATION_SCHEDULED';
+  }
+  // TERM/REPL and friends mean the filing was replaced, not that coverage stops.
+  return hasAnyPolicy ? 'COVERED' : 'CANCELLATION_SCHEDULED';
 }
 
 async function socrata<T>(dataset: string, params: Record<string, string>, timeoutMs = 20_000): Promise<T[] | null> {
@@ -252,12 +294,15 @@ class FmcsaLeadsService {
     const safety = safetyCode(filters.minSafety);
     // Bump the version whenever the lead rules change so cached lists from the
     // previous rules aren't served for up to an hour after a deploy.
-    const cacheKey = `insurance_leads:fmcsa:v5:${JSON.stringify({
+    const cacheKey = `insurance_leads:fmcsa:v6:${JSON.stringify({
       windowDays,
       state,
       minUnits: filters.minUnits ?? null,
       maxUnits: filters.maxUnits ?? null,
       safety,
+      name: filters.nameContains ?? null,
+      addedAfter: toStamp(filters.addedAfter),
+      addedBefore: toStamp(filters.addedBefore),
     })}`;
 
     try {
@@ -323,6 +368,16 @@ class FmcsaLeadsService {
     if (filters.minUnits != null) censusWhere.push(`(power_units::number) >= ${Number(filters.minUnits)}`);
     if (filters.maxUnits != null) censusWhere.push(`(power_units::number) <= ${Number(filters.maxUnits)}`);
     if (safety) censusWhere.push(`safety_rating='${safety}'`);
+    // The census carries the same prospecting fields the Leads tools filter on, so
+    // an insurance search there keeps every other filter the user set.
+    if (filters.nameContains) {
+      const needle = filters.nameContains.toUpperCase().replace(/'/g, "''");
+      censusWhere.push(`(upper(legal_name) like '%${needle}%' OR upper(dba_name) like '%${needle}%')`);
+    }
+    const addedAfter = toStamp(filters.addedAfter);
+    const addedBefore = toStamp(filters.addedBefore);
+    if (addedAfter) censusWhere.push(`add_date >= '${addedAfter}'`);
+    if (addedBefore) censusWhere.push(`add_date <= '${addedBefore}'`);
 
     const census = await overDotChunks<CensusRow>(candidateDots, (chunk) =>
       socrata<CensusRow>(DATASET_CENSUS, {
@@ -392,31 +447,8 @@ class FmcsaLeadsService {
       // Their live cancellation may sit outside the window the buyer asked about.
       if (cancelStamp < windowStartStamp || cancelStamp > windowEndStamp) continue;
 
-      const lapsed = cancelStamp < todayStamp;
-      const activeRows = activeByDot.get(dot) || [];
-      const cancellingPolicy = normalizePolicy(cancellation.policy_no);
-      const hasAnyPolicy = activeRows.some((policy) => normalizePolicy(policy.policy_no));
-      const hasOtherPolicy = activeRows.some((policy) => {
-        const active = normalizePolicy(policy.policy_no);
-        return !!active && active !== cancellingPolicy;
-      });
-      const reason = (cancellation.filing_status_reason || '').trim().toUpperCase();
-
-      if (lapsed) {
-        // Cancellation already took effect: a lead only while nothing replaced it.
-        // Any BIPD policy on file means they re-insured.
-        if (hasAnyPolicy) continue;
-      } else if (reason === 'CANCEL') {
-        // A live notice of cancellation — the insurer is walking away and nothing
-        // has taken over. The cancelled policy is still on file until the date
-        // passes, so only a *different* active policy means they're covered.
-        if (hasOtherPolicy) continue;
-      } else {
-        // TERM/REPL and friends mean the filing was replaced, not that coverage
-        // stops. FMCSA re-files the same policy number and leaves the old row
-        // behind, so any policy on file means this cancellation is bookkeeping.
-        if (hasAnyPolicy) continue;
-      }
+      const status = verdict(cancellation, activeByDot.get(dot) || [], todayStamp);
+      if (status === 'COVERED') continue;
 
       const expiry = isoFromYyyymmdd(cancelStamp);
       leads.push({
@@ -431,7 +463,7 @@ class FmcsaLeadsService {
         insuranceStatus: 'pending',
         insuranceExpiryDate: expiry,
         daysUntilExpiry: expiry ? daysUntil(expiry) : null,
-        pendingReason: lapsed ? 'COVERAGE_LAPSED' : 'CANCELLATION_SCHEDULED',
+        pendingReason: status,
       });
     }
 
@@ -447,6 +479,116 @@ class FmcsaLeadsService {
       return aDays - bDays || a.dotNumber.localeCompare(b.dotNumber);
     });
     return leads;
+  }
+
+  /**
+   * The live insurance verdict for an arbitrary set of carriers, for tools that
+   * search on something other than insurance (Leads, Lead Generator) but still
+   * show an insurance column. Two Socrata calls per chunk of 150 DOTs — never one
+   * per row — and the answer matches the Insurance Leads list exactly.
+   * Returns null if FMCSA can't be reached, so callers can show nothing rather
+   * than an invented "covered".
+   */
+  async insuranceStatusFor(dots: string[]): Promise<Map<string, InsuranceSnapshot> | null> {
+    const wanted = Array.from(new Set(dots.map((d) => String(d).trim()).filter(Boolean)));
+    if (wanted.length === 0) return new Map();
+
+    const cacheKey = `insurance_snapshot:v1:${wanted.slice().sort().join(',')}`;
+    try {
+      const cached = await cacheService.get<Array<[string, InsuranceSnapshot]>>(cacheKey);
+      if (cached) return new Map(cached);
+    } catch {
+      // cache is best-effort
+    }
+
+    const todayStamp = yyyymmdd(new Date());
+
+    const history = await overDotChunks<CancellationRow>(wanted, (chunk) =>
+      socrata<CancellationRow>(DATASET_CANCELLATIONS, {
+        $select: CANCELLATION_SELECT,
+        $where: `${BIPD_TYPES} AND usdot_number in (${quoteList(chunk)})`,
+        $limit: '50000',
+      })
+    );
+    if (!history) return null;
+
+    const activePolicies = await overDotChunks<ActivePolicyRow>(wanted, (chunk) =>
+      socrata<ActivePolicyRow>(DATASET_ACTIVE_POLICIES, {
+        $select: 'usdot_number, policy_no, effective_date, trans_date',
+        $where: `ins_type_code='1' AND usdot_number in (${quoteList(chunk)})`,
+        $limit: String(DOT_CHUNK * 20),
+      })
+    );
+    if (!activePolicies) return null;
+
+    const historyByDot = new Map<string, CancellationRow[]>();
+    for (const row of history) {
+      const dot = (row.usdot_number || '').trim();
+      if (!dot) continue;
+      if (!historyByDot.has(dot)) historyByDot.set(dot, []);
+      historyByDot.get(dot)!.push(row);
+    }
+    const activeByDot = new Map<string, ActivePolicyRow[]>();
+    for (const row of activePolicies) {
+      const dot = (row.usdot_number || '').trim();
+      if (!dot) continue;
+      if (!activeByDot.has(dot)) activeByDot.set(dot, []);
+      activeByDot.get(dot)!.push(row);
+    }
+
+    const out = new Map<string, InsuranceSnapshot>();
+    for (const dot of wanted) {
+      const cancellation = governingCancellation(historyByDot.get(dot) || [], todayStamp);
+      if (!cancellation) {
+        out.set(dot, { status: 'COVERED', cancellationDate: null, daysUntilCancellation: null });
+        continue;
+      }
+      const status = verdict(cancellation, activeByDot.get(dot) || [], todayStamp);
+      const iso = isoFromYyyymmdd((cancellation.cancl_effective_date || '').trim());
+      out.set(dot, {
+        status,
+        // A date only means something when the cancellation actually bites; an
+        // insurer swap on a covered carrier would read as a warning it isn't.
+        cancellationDate: status === 'COVERED' ? null : iso,
+        daysUntilCancellation: status === 'COVERED' || !iso ? null : daysUntil(iso),
+      });
+    }
+
+    try {
+      await cacheService.set(cacheKey, Array.from(out.entries()), 3600);
+    } catch {
+      // cache is best-effort
+    }
+    return out;
+  }
+
+  /**
+   * Public FMCSA census phone/email for a set of carriers — one query per chunk of
+   * 150. Used to fill in contact details the carrier-data provider doesn't have.
+   */
+  async contactsFor(dots: string[]): Promise<Map<string, CarrierContact>> {
+    const wanted = Array.from(new Set(dots.map((d) => String(d).trim()).filter(Boolean)));
+    const out = new Map<string, CarrierContact>();
+    if (wanted.length === 0) return out;
+
+    const rows = await overDotChunks<CensusRow>(wanted, (chunk) =>
+      socrata<CensusRow>(DATASET_CENSUS, {
+        $select: 'dot_number, phone, email_address',
+        $where: `dot_number in (${quoteList(chunk)})`,
+        $limit: String(DOT_CHUNK * 4),
+      })
+    );
+    if (!rows) return out;
+
+    for (const row of rows) {
+      const dot = (row.dot_number || '').trim();
+      if (!dot) continue;
+      out.set(dot, {
+        phone: formatPhone(row.phone),
+        email: (row.email_address || '').trim() || null,
+      });
+    }
+    return out;
   }
 }
 
