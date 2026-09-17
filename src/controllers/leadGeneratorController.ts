@@ -111,6 +111,8 @@ function toRow(c: any) {
     safetyRating: safetyLabel(c.safety_rating),
     insuranceCancellationDate: null as string | null,
     insuranceStatus: null as string | null,
+    phone: null as string | null,
+    email: null as string | null,
   };
 }
 
@@ -144,7 +146,22 @@ function leadToRow(l: InsuranceLead) {
     safetyRating: l.safetyRating,
     insuranceCancellationDate: l.insuranceExpiryDate,
     insuranceStatus: l.pendingReason,
+    // Public FMCSA census contact — every tier gets it with the row.
+    phone: l.phone,
+    email: l.email,
   };
+}
+
+// The census contact for a whole page in one query. The per-carrier reveal
+// endpoints stay for the rows FMCSA has nothing for.
+async function withContacts<T extends { dotNumber: string; phone: string | null; email: string | null }>(
+  rows: T[]
+) {
+  const contacts = await fmcsaLeadsService.contactsFor(rows.map((r) => r.dotNumber));
+  return rows.map((row) => {
+    const hit = contacts.get(row.dotNumber);
+    return hit ? { ...row, phone: row.phone || hit.phone, email: row.email || hit.email } : row;
+  });
 }
 
 // Two FMCSA queries for a whole page of rows — never one per carrier.
@@ -213,7 +230,7 @@ export async function searchCarriers(req: AuthRequest, res: Response) {
     const row = toRow(c);
     if (!byDot.has(row.dotNumber)) byDot.set(row.dotNumber, row);
   }
-  const carriers = await withInsurance([...byDot.values()]);
+  const carriers = await withContacts(await withInsurance([...byDot.values()]));
 
   res.json({
     success: true,
@@ -435,9 +452,10 @@ async function csvRowsWithInsurance(rows: Array<Record<string, unknown>>) {
 }
 
 // GET /api/lead-generator/export.csv — available to any Lead Generator tier.
-//   Buyer ($49): downloads the current page only (25 carriers), core columns.
+//   Buyer ($49): downloads the current page only (25 carriers), with the census
+//     phone/email the table shows.
 //   Broker/Admin: downloads the full result set (paginated up to maxRows) and
-//   enriches each row with phone + email (fetched per-carrier from LINQ).
+//   enriches each row with phone + email (per-carrier from LINQ, census as backup).
 export async function exportCsv(req: AuthRequest, res: Response) {
   const tier = req.leadGenTier ?? 'BUYER';
   const isBrokerTier = tier === 'BROKER' || tier === 'ADMIN';
@@ -451,7 +469,8 @@ export async function exportCsv(req: AuthRequest, res: Response) {
   const baseFilters: LinqSearchFilters =
     Object.keys(userFilters).length === 0 ? { status: 'ACTIVE' } : userFilters;
 
-  const headers = isBrokerTier ? [...BASE_CSV_COLUMNS, 'phone', 'email'] : BASE_CSV_COLUMNS;
+  // Every tier exports contact now that every tier sees it on screen.
+  const headers = [...BASE_CSV_COLUMNS, 'phone', 'email'];
   const escape = (v: unknown) => {
     if (v == null) return '';
     const s = String(v);
@@ -514,7 +533,13 @@ export async function exportCsv(req: AuthRequest, res: Response) {
     }
     const lines = [headers.join(',')];
     const pageRows = await csvRowsWithInsurance((result.carriers || []).slice(0, 25).map(rowFromCarrier));
-    for (const row of pageRows) lines.push(toLine(row));
+    const census = await fmcsaLeadsService.contactsFor(pageRows.map((r) => String(r.dot_number)));
+    for (const row of pageRows) {
+      const hit = census.get(String(row.dot_number));
+      row.phone = hit?.phone || '';
+      row.email = hit?.email || '';
+      lines.push(toLine(row));
+    }
     res.setHeader('Content-Type', 'text/csv; charset=utf-8');
     res.setHeader(
       'Content-Disposition',

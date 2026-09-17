@@ -66,8 +66,14 @@ export const config = {
     host: process.env.SMTP_HOST || '',
     port: parseInt(process.env.SMTP_PORT || '587', 10),
     secure: process.env.SMTP_SECURE === 'true', // true for 465, false for other ports
-    user: process.env.SMTP_USER || '',
-    pass: process.env.SMTP_PASS || '',
+    user: (process.env.SMTP_USER || '').trim(),
+    // Google shows app passwords in four spaced groups ("abcd efgh ijkl mnop") and
+    // those spaces are display only — pasted in verbatim they reach Gmail as part of
+    // the password and AUTH fails with 535-5.7.8. Strip them for Gmail; elsewhere
+    // only trim the ends, since another provider's password could contain a space.
+    pass: /gmail|googlemail/i.test(process.env.SMTP_HOST || '')
+      ? (process.env.SMTP_PASS || '').replace(/\s+/g, '')
+      : (process.env.SMTP_PASS || '').trim(),
     fromEmail: process.env.EMAIL_FROM || 'noreply@domilea.com',
     fromName: process.env.EMAIL_FROM_NAME || 'Domilea',
     replyTo: process.env.EMAIL_REPLY_TO || '',
