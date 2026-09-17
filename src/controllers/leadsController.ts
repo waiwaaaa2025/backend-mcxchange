@@ -332,7 +332,27 @@ export async function listLeads(req: AuthedRequest, res: Response) {
     ],
     order: [['updatedAt', 'DESC']],
   });
-  res.json({ success: true, data: leads });
+
+  // The stored snapshot is whatever FMCSA said the day the lead was saved, so a rep
+  // could be calling a carrier that re-insured weeks ago. One lookup for the whole
+  // pipeline gives every row today's answer; the snapshot stays as the fallback.
+  const withStatus = await attachLiveInsurance(leads);
+  res.json({ success: true, data: withStatus });
+}
+
+// Adds `insuranceStatus` / `insuranceCancellationDate` to saved Lead rows.
+const LIVE_INSURANCE_CAP = 500;
+async function attachLiveInsurance(leads: Lead[]) {
+  const dots = leads.slice(0, LIVE_INSURANCE_CAP).map((l) => String(l.dotNumber));
+  const snapshots = dots.length ? await fmcsaLeadsService.insuranceStatusFor(dots) : new Map();
+  return leads.map((lead) => {
+    const snap = snapshots?.get(String(lead.dotNumber));
+    return {
+      ...lead.toJSON(),
+      insuranceStatus: snap?.status ?? null,
+      insuranceCancellationDate: snap?.cancellationDate ?? null,
+    };
+  });
 }
 
 // POST /api/admin/leads - save a carrier as a lead for the current rep.
@@ -348,23 +368,28 @@ export async function createLead(req: AuthedRequest, res: Response) {
 
   if (!dotNumber) return res.status(400).json({ success: false, error: 'dotNumber required' });
 
-  // Pull a one-shot snapshot from LINQ to denormalize onto the Lead row.
-  // This is a fixed cost per save (not a mirror). Scout's enrich_lead refreshes
-  // these same fields when it runs (and adds the AI summary to notes).
+  // Pull a one-shot snapshot to denormalize onto the Lead row. This is a fixed
+  // cost per save (not a mirror). Scout's enrich_lead refreshes these same fields
+  // when it runs (and adds the AI summary to notes).
+  //
+  // Insurance and contact come from FMCSA: the provider's `earliest_cancellation_date`
+  // comes back null for carriers that demonstrably have a cancellation filed, and its
+  // phone/email disagree with the carrier's own filing.
+  const [snapshots, contacts] = await Promise.all([
+    fmcsaLeadsService.insuranceStatusFor([dotNumber]),
+    fmcsaLeadsService.contactsFor([dotNumber]),
+  ]);
+  const snapshot = snapshots?.get(dotNumber) ?? null;
+  let insuranceCancel: string | null = snapshot?.cancellationDate ?? null;
+  let phone: string | null = contacts.get(dotNumber)?.phone ?? null;
+  let email: string | null = contacts.get(dotNumber)?.email ?? null;
   let carrierName: string | null = null;
-  let phone: string | null = null;
-  let email: string | null = null;
-  let insuranceCancel: string | null = null;
+
   if (morproLinqService.isConfigured()) {
-    const [carrier, insurance] = await Promise.all([
-      morproLinqService.getCarrier(dotNumber),
-      morproLinqService.getInsurance(dotNumber),
-    ]);
-    const cj: any = carrier || {};
-    carrierName = cj.legal_name || null;
-    phone = cj.phone || cj.cell_phone || null;
-    email = cj.email || null;
-    insuranceCancel = insurance?.summary?.earliest_cancellation_date || null;
+    const carrier: any = (await morproLinqService.getCarrier(dotNumber)) || {};
+    carrierName = carrier.legal_name || null;
+    phone = phone || carrier.phone || carrier.cell_phone || null;
+    email = email || carrier.email || null;
   }
 
   const [lead, created] = await Lead.findOrCreate({
@@ -533,13 +558,7 @@ export async function getPipelineStats(req: AuthedRequest, res: Response) {
         ],
       } as any,
     }),
-    Lead.count({
-      where: {
-        assignedToUserId: userId,
-        insuranceCancellationSnapshot: { [Op.between]: [today, weekOut] },
-        status: { [Op.notIn]: [LeadStatus.WON, LeadStatus.DEAD, LeadStatus.NOT_INTERESTED] },
-      } as any,
-    }),
+    countUrgentInsurance(userId, today, weekOut),
     Lead.count({
       where: {
         assignedToUserId: userId,
@@ -559,6 +578,48 @@ export async function getPipelineStats(req: AuthedRequest, res: Response) {
     success: true,
     data: { needsFollowUp, expiring, activePipeline, wonThisMonth },
   });
+}
+
+/**
+ * Open leads that need calling on insurance grounds today: the carrier is already
+ * running with nothing on file, or a cancellation lands inside the week. Counted
+ * from FMCSA rather than the save-time snapshot, which goes stale the moment the
+ * carrier re-insures — and which never marked the already-bare ones at all.
+ */
+async function countUrgentInsurance(userId: string, today: string, weekOut: string): Promise<number> {
+  const open = await Lead.findAll({
+    where: {
+      assignedToUserId: userId,
+      status: { [Op.notIn]: [LeadStatus.WON, LeadStatus.DEAD, LeadStatus.NOT_INTERESTED] },
+    } as any,
+    attributes: ['dotNumber', 'insuranceCancellationSnapshot'],
+    limit: LIVE_INSURANCE_CAP,
+  });
+  if (open.length === 0) return 0;
+
+  const snapshots = await fmcsaLeadsService.insuranceStatusFor(open.map((l) => String(l.dotNumber)));
+  if (!snapshots) {
+    // FMCSA unreachable — fall back to the stored dates rather than showing zero.
+    return open.filter((l) => {
+      // DATEONLY comes back as a 'YYYY-MM-DD' string, but is typed as a Date.
+      const d = l.insuranceCancellationSnapshot
+        ? String(l.insuranceCancellationSnapshot).slice(0, 10)
+        : null;
+      return !!d && d >= today && d <= weekOut;
+    }).length;
+  }
+
+  return open.filter((l) => {
+    const snap = snapshots.get(String(l.dotNumber));
+    if (!snap) return false;
+    if (snap.status === 'COVERAGE_LAPSED') return true;
+    return (
+      snap.status === 'CANCELLATION_SCHEDULED' &&
+      !!snap.cancellationDate &&
+      snap.cancellationDate >= today &&
+      snap.cancellationDate <= weekOut
+    );
+  }).length;
 }
 
 // DELETE /api/admin/leads/:id
