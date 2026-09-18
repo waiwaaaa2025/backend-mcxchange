@@ -22,8 +22,13 @@
  * FMCSA does not publish cancellations ahead of time. Forward-dated rows are
  * ~99% TERM/REPL — an insurer swap where coverage never stops — while genuine
  * `CANCEL` notices barely appear before their effective date (~2/week ahead
- * against ~500/week behind). So the real product is the carrier who is already
- * bare: a cancellation that took effect with no replacement policy on file.
+ * against ~500/week behind).
+ *
+ * The list is deliberately only those few: a carrier whose BIPD policy is still
+ * active on file with a CANCEL notice dated inside the window, and nothing else
+ * to replace it — e.g. MC792423 (DOT 2318629), active SiriusPoint policy, cancels
+ * 2026-09-20. Carriers already bare (no policy on file) are not shown; buyers
+ * asked for the ones that can still be sold before their coverage stops.
  */
 import {
   CarrierContact,
@@ -43,11 +48,6 @@ const DATASET_CENSUS = 'az4n-8mr2';
 
 // Socrata allows anonymous use; an app token only raises the shared rate limit.
 const APP_TOKEN = process.env.FMCSA_SOCRATA_APP_TOKEN || '';
-
-// Carriers whose cancellation already took effect and who have no BIPD policy on
-// file are the strongest leads — coverage is gone, not merely scheduled to go — so
-// the search looks this far back as well as forward.
-const LAPSED_LOOKBACK_DAYS = 30;
 
 // `dot_number in (...)` lists — 150 keeps the query string well under Socrata's limit.
 const DOT_CHUNK = 150;
@@ -294,7 +294,7 @@ class FmcsaLeadsService {
     const safety = safetyCode(filters.minSafety);
     // Bump the version whenever the lead rules change so cached lists from the
     // previous rules aren't served for up to an hour after a deploy.
-    const cacheKey = `insurance_leads:fmcsa:v6:${JSON.stringify({
+    const cacheKey = `insurance_leads:fmcsa:v7:${JSON.stringify({
       windowDays,
       state,
       minUnits: filters.minUnits ?? null,
@@ -344,14 +344,13 @@ class FmcsaLeadsService {
     const today = new Date();
     const todayStamp = yyyymmdd(today);
     const windowEndStamp = yyyymmdd(new Date(today.getTime() + windowDays * 86_400_000));
-    const windowStartStamp = yyyymmdd(new Date(today.getTime() - LAPSED_LOOKBACK_DAYS * 86_400_000));
 
-    // 1. Every BIPD cancellation in the window — recently lapsed as well as upcoming.
+    // 1. Every BIPD cancellation notice dated from today to the end of the window.
     //    This only nominates candidates; which cancellation governs is settled in
     //    step 3, against the carrier's whole history rather than this slice.
     const candidates = await socrata<CancellationRow>(DATASET_CANCELLATIONS, {
       $select: 'usdot_number',
-      $where: `${BIPD_TYPES} AND cancl_effective_date >= '${windowStartStamp}' AND cancl_effective_date <= '${windowEndStamp}'`,
+      $where: `${BIPD_TYPES} AND filing_status_reason='CANCEL' AND cancl_effective_date >= '${todayStamp}' AND cancl_effective_date <= '${windowEndStamp}'`,
       $limit: '50000',
     });
     if (!candidates) return null;
@@ -445,10 +444,17 @@ class FmcsaLeadsService {
 
       const cancelStamp = (cancellation.cancl_effective_date || '').trim();
       // Their live cancellation may sit outside the window the buyer asked about.
-      if (cancelStamp < windowStartStamp || cancelStamp > windowEndStamp) continue;
+      if (cancelStamp < todayStamp || cancelStamp > windowEndStamp) continue;
+      if ((cancellation.filing_status_reason || '').trim().toUpperCase() !== 'CANCEL') continue;
 
-      const status = verdict(cancellation, activeByDot.get(dot) || [], todayStamp);
-      if (status === 'COVERED') continue;
+      // The policy being cancelled must still be active on file: a carrier with no
+      // insurance on file is already bare, not pending.
+      const active = activeByDot.get(dot) || [];
+      const cancellingPolicy = normalizePolicy(cancellation.policy_no);
+      if (!cancellingPolicy || !active.some((p) => normalizePolicy(p.policy_no) === cancellingPolicy)) continue;
+
+      const status = verdict(cancellation, active, todayStamp);
+      if (status !== 'CANCELLATION_SCHEDULED') continue;
 
       const expiry = isoFromYyyymmdd(cancelStamp);
       leads.push({
@@ -467,17 +473,12 @@ class FmcsaLeadsService {
       });
     }
 
-    // Already-uninsured carriers first (most recent lapse first — the coldest trail
-    // is the oldest one), then upcoming cancellations by how soon they bite.
-    leads.sort((a, b) => {
-      const aDays = a.daysUntilExpiry ?? Infinity;
-      const bDays = b.daysUntilExpiry ?? Infinity;
-      const aLapsed = a.pendingReason === 'COVERAGE_LAPSED';
-      const bLapsed = b.pendingReason === 'COVERAGE_LAPSED';
-      if (aLapsed !== bLapsed) return aLapsed ? -1 : 1;
-      if (aLapsed) return bDays - aDays;
-      return aDays - bDays || a.dotNumber.localeCompare(b.dotNumber);
-    });
+    // Soonest cancellation first.
+    leads.sort(
+      (a, b) =>
+        (a.daysUntilExpiry ?? Infinity) - (b.daysUntilExpiry ?? Infinity) ||
+        a.dotNumber.localeCompare(b.dotNumber)
+    );
     return leads;
   }
 
