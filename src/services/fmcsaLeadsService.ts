@@ -58,6 +58,11 @@ const CHUNK_CONCURRENCY = 4;
 // number of rows; matching only the exact string silently drops those carriers.
 const BIPD_TYPES = `starts_with(ins_type_desc, 'BIPD')`;
 
+// Active BIPD filings that are actual coverage. The Insur table also carries
+// BMC-35 rows — the insurer's notice of cancellation, ~6,000 of them — which read
+// as a second live policy unless excluded (MC839316 was hidden that way).
+const ACTIVE_BIPD = `ins_type_code='1' AND (ins_form_code IS NULL OR ins_form_code != 'BMC-35')`;
+
 const CANCELLATION_SELECT =
   'usdot_number, docket_number, cancl_effective_date, effective_date, insurance_company_name, policy_no, filing_status_reason';
 
@@ -108,6 +113,17 @@ interface ActivePolicyRow {
 // "02TRM06906101" in the other), so compare on alphanumerics only.
 function normalizePolicy(value: string | undefined): string {
   return (value || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+}
+
+/**
+ * One filing = policy number + effective date. An insurer can re-file the same
+ * policy number: MC38813 (DOT 3029893) had its 2026-07-03 Crum & Forster filing
+ * cancelled for 09-21 while a fresh 07-20 filing of that same policy stays active
+ * with no cancellation — so matching on the policy number alone read a covered
+ * carrier as about to lapse.
+ */
+function filingKey(policyNo: string | undefined, effectiveDate: string | undefined): string {
+  return `${normalizePolicy(policyNo)}|${(effectiveDate || '').trim()}`;
 }
 
 function yyyymmdd(date: Date): string {
@@ -209,12 +225,15 @@ function verdict(
   const cancelStamp = (cancellation.cancl_effective_date || '').trim();
   if (!cancelStamp) return 'COVERED';
 
-  const cancellingPolicy = normalizePolicy(cancellation.policy_no);
+  const cancellingFiling = filingKey(cancellation.policy_no, cancellation.effective_date);
   const hasAnyPolicy = activeRows.some((policy) => normalizePolicy(policy.policy_no));
-  const hasOtherPolicy = activeRows.some((policy) => {
-    const active = normalizePolicy(policy.policy_no);
-    return !!active && active !== cancellingPolicy;
-  });
+  // Any other live filing covers them — a different policy, or a newer filing of
+  // the same policy number.
+  const hasOtherPolicy = activeRows.some(
+    (policy) =>
+      !!normalizePolicy(policy.policy_no) &&
+      filingKey(policy.policy_no, policy.effective_date) !== cancellingFiling
+  );
   const reason = (cancellation.filing_status_reason || '').trim().toUpperCase();
 
   if (cancelStamp < todayStamp) {
@@ -222,8 +241,8 @@ function verdict(
     return hasAnyPolicy ? 'COVERED' : 'COVERAGE_LAPSED';
   }
   if (reason === 'CANCEL') {
-    // A live notice of cancellation. The cancelled policy stays on file until the
-    // date passes, so only a *different* active policy means they're covered.
+    // A live notice of cancellation. The cancelled filing stays on file until the
+    // date passes, so only a *different* active filing means they're covered.
     return hasOtherPolicy ? 'COVERED' : 'CANCELLATION_SCHEDULED';
   }
   // TERM/REPL and friends mean the filing was replaced, not that coverage stops.
@@ -294,7 +313,7 @@ class FmcsaLeadsService {
     const safety = safetyCode(filters.minSafety);
     // Bump the version whenever the lead rules change so cached lists from the
     // previous rules aren't served for up to an hour after a deploy.
-    const cacheKey = `insurance_leads:fmcsa:v8:${JSON.stringify({
+    const cacheKey = `insurance_leads:fmcsa:v10:${JSON.stringify({
       windowDays,
       state,
       minUnits: filters.minUnits ?? null,
@@ -423,7 +442,7 @@ class FmcsaLeadsService {
     const activePolicies = await overDotChunks<ActivePolicyRow>(Array.from(carriers.keys()), (chunk) =>
       socrata<ActivePolicyRow>(DATASET_ACTIVE_POLICIES, {
         $select: 'usdot_number, policy_no, effective_date, trans_date',
-        $where: `ins_type_code='1' AND usdot_number in (${quoteList(chunk)})`,
+        $where: `${ACTIVE_BIPD} AND usdot_number in (${quoteList(chunk)})`,
         $limit: String(DOT_CHUNK * 20),
       })
     );
@@ -447,11 +466,14 @@ class FmcsaLeadsService {
       if (cancelStamp < todayStamp || cancelStamp > windowEndStamp) continue;
       if ((cancellation.filing_status_reason || '').trim().toUpperCase() !== 'CANCEL') continue;
 
-      // The policy being cancelled must still be active on file: a carrier with no
-      // insurance on file is already bare, not pending.
+      // The filing being cancelled must still be the one active on file: a carrier
+      // with no insurance on file is already bare, not pending.
       const active = activeByDot.get(dot) || [];
-      const cancellingPolicy = normalizePolicy(cancellation.policy_no);
-      if (!cancellingPolicy || !active.some((p) => normalizePolicy(p.policy_no) === cancellingPolicy)) continue;
+      const cancellingFiling = filingKey(cancellation.policy_no, cancellation.effective_date);
+      if (
+        !normalizePolicy(cancellation.policy_no) ||
+        !active.some((p) => filingKey(p.policy_no, p.effective_date) === cancellingFiling)
+      ) continue;
 
       const status = verdict(cancellation, active, todayStamp);
       if (status !== 'CANCELLATION_SCHEDULED') continue;
@@ -495,7 +517,7 @@ class FmcsaLeadsService {
     const wanted = Array.from(new Set(dots.map((d) => String(d).trim()).filter(Boolean)));
     if (wanted.length === 0) return new Map();
 
-    const cacheKey = `insurance_snapshot:v2:${wanted.slice().sort().join(',')}`;
+    const cacheKey = `insurance_snapshot:v4:${wanted.slice().sort().join(',')}`;
     try {
       const cached = await cacheService.get<Array<[string, InsuranceSnapshot]>>(cacheKey);
       if (cached) return new Map(cached);
@@ -517,7 +539,7 @@ class FmcsaLeadsService {
     const activePolicies = await overDotChunks<ActivePolicyRow>(wanted, (chunk) =>
       socrata<ActivePolicyRow>(DATASET_ACTIVE_POLICIES, {
         $select: 'usdot_number, policy_no, effective_date, trans_date',
-        $where: `ins_type_code='1' AND usdot_number in (${quoteList(chunk)})`,
+        $where: `${ACTIVE_BIPD} AND usdot_number in (${quoteList(chunk)})`,
         $limit: String(DOT_CHUNK * 20),
       })
     );
