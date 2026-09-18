@@ -170,6 +170,12 @@ function renewalStampFor(activeRows: ActivePolicyRow[], todayStamp: string): { s
   const filing = currentFiling(activeRows, todayStamp);
   if (!filing) return null;
   const eff = (filing.effective_date || '').trim();
+  // A filing that starts in the future means the next term is already bound —
+  // MC1501174 (DOT 3997019) had SiriusPoint renewing 2026-09-19 and a Berkley
+  // filing, made 09-11, effective that same day. Not a renewal lead.
+  if (activeRows.some((row) => normalizePolicy(row.policy_no) && (row.effective_date || '').trim() > todayStamp)) {
+    return null;
+  }
   const stamp = nextAnniversary(eff, todayStamp);
   if (!stamp || stamp.slice(0, 4) <= eff.slice(0, 4)) return null;
   return { stamp, filing };
@@ -375,7 +381,7 @@ class FmcsaLeadsService {
     // Bump the version whenever the lead rules change so cached lists from the
     // previous rules aren't served for up to an hour after a deploy.
     const leadType = filters.leadType === 'cancellation' || filters.leadType === 'renewal' ? filters.leadType : 'all';
-    const cacheKey = `insurance_leads:fmcsa:v11:${JSON.stringify({
+    const cacheKey = `insurance_leads:fmcsa:v12:${JSON.stringify({
       leadType,
       windowDays,
       state,
@@ -635,7 +641,7 @@ class FmcsaLeadsService {
     const wanted = Array.from(new Set(dots.map((d) => String(d).trim()).filter(Boolean)));
     if (wanted.length === 0) return new Map();
 
-    const cacheKey = `insurance_snapshot:v5:${wanted.slice().sort().join(',')}`;
+    const cacheKey = `insurance_snapshot:v6:${wanted.slice().sort().join(',')}`;
     try {
       const cached = await cacheService.get<Array<[string, InsuranceSnapshot]>>(cacheKey);
       if (cached) return new Map(cached);
