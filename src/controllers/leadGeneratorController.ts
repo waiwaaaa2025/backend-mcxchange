@@ -146,6 +146,7 @@ function leadToRow(l: InsuranceLead) {
     safetyRating: l.safetyRating,
     insuranceCancellationDate: l.insuranceExpiryDate,
     insuranceStatus: l.pendingReason,
+    insuranceCompany: l.insuranceCompany,
     // Public FMCSA census contact — every tier gets it with the row.
     phone: l.phone,
     email: l.email,
@@ -173,6 +174,7 @@ async function withInsurance<T extends { dotNumber: string }>(rows: T[]) {
       ...row,
       insuranceCancellationDate: snap?.cancellationDate ?? null,
       insuranceStatus: snap?.status ?? null,
+      insuranceCompany: snap?.insuranceCompany ?? null,
     };
   });
 }
@@ -411,6 +413,7 @@ const BASE_CSV_COLUMNS = [
   'safety_rating',
   'insurance_cancellation_date',
   'insurance_status',
+  'insurance_company',
 ];
 
 function rowFromCarrier(c: any): Record<string, unknown> {
@@ -425,6 +428,7 @@ function rowFromCarrier(c: any): Record<string, unknown> {
     safety_rating: safetyLabel(c.safety_rating),
     insurance_cancellation_date: '',
     insurance_status: '',
+    insurance_company: '',
   };
 }
 
@@ -440,6 +444,7 @@ function rowFromLead(l: InsuranceLead): Record<string, unknown> {
     safety_rating: l.safetyRating,
     insurance_cancellation_date: l.insuranceExpiryDate || '',
     insurance_status: l.pendingReason || '',
+    insurance_company: l.insuranceCompany || '',
     phone: l.phone || '',
     email: l.email || '',
   };
@@ -454,6 +459,7 @@ async function csvRowsWithInsurance(rows: Array<Record<string, unknown>>) {
     const snap = snapshots.get(String(row.dot_number));
     row.insurance_cancellation_date = snap?.cancellationDate || '';
     row.insurance_status = snap?.status || '';
+    row.insurance_company = snap?.insuranceCompany || '';
   }
   return rows;
 }

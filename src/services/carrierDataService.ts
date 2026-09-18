@@ -439,6 +439,7 @@ class CarrierDataService {
             insuranceExpiryDate: cancelDate,
             daysUntilExpiry: cancelDate ? daysUntil(cancelDate) : null,
             pendingReason: cancelDate ? 'CANCELLATION_SCHEDULED' : null,
+            insuranceCompany: cancelling?.company || null,
           };
         })
       );

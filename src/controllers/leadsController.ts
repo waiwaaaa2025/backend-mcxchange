@@ -99,6 +99,7 @@ function leadToListShape(l: InsuranceLead) {
     safetyRating: l.safetyRating,
     insuranceCancellationDate: l.insuranceExpiryDate,
     insuranceStatus: l.pendingReason,
+    insuranceCompany: l.insuranceCompany,
     phone: l.phone,
     email: l.email,
   };
@@ -115,6 +116,7 @@ async function withInsurance<T extends { dotNumber: string }>(rows: T[]) {
       ...row,
       insuranceCancellationDate: snap?.cancellationDate ?? null,
       insuranceStatus: snap?.status ?? null,
+      insuranceCompany: snap?.insuranceCompany ?? null,
     };
   });
 }
@@ -287,13 +289,14 @@ function sendCarriersCsv(
     dotNumber: string; legalName: string | null; dba: string | null; state: string | null;
     totalPowerUnits: number | null; totalDrivers: number | null; authorityStatus: string | null;
     safetyRating: string | null; insuranceCancellationDate: string | null;
-    insuranceStatus?: string | null; phone: string | null; email: string | null;
+    insuranceStatus?: string | null; insuranceCompany?: string | null;
+    phone: string | null; email: string | null;
   }>
 ) {
   const csvHeaders = [
     'dot_number', 'legal_name', 'dba', 'state', 'total_power_units', 'total_drivers',
     'authority_status', 'safety_rating', 'insurance_cancellation_date', 'insurance_status',
-    'phone', 'email',
+    'insurance_company', 'phone', 'email',
   ];
   const escape = (v: unknown) => {
     if (v == null) return '';
@@ -305,7 +308,7 @@ function sendCarriersCsv(
     lines.push([
       r.dotNumber, r.legalName, r.dba, r.state, r.totalPowerUnits, r.totalDrivers,
       r.authorityStatus, r.safetyRating, r.insuranceCancellationDate, r.insuranceStatus ?? null,
-      r.phone, r.email,
+      r.insuranceCompany ?? null, r.phone, r.email,
     ].map(escape).join(','));
   }
 
@@ -351,6 +354,7 @@ async function attachLiveInsurance(leads: Lead[]) {
       ...lead.toJSON(),
       insuranceStatus: snap?.status ?? null,
       insuranceCancellationDate: snap?.cancellationDate ?? null,
+      insuranceCompany: snap?.insuranceCompany ?? null,
     };
   });
 }

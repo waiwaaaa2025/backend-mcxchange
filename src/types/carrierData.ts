@@ -38,6 +38,7 @@ export interface InsuranceSnapshot {
   status: 'COVERAGE_LAPSED' | 'CANCELLATION_SCHEDULED' | 'COVERED';
   cancellationDate: string | null;   // ISO; null unless a cancellation actually bites
   daysUntilCancellation: number | null;
+  insuranceCompany: string | null;   // insurer on that policy; null when COVERED
 }
 
 /** Public FMCSA census contact for a carrier. */
@@ -60,6 +61,8 @@ export interface InsuranceLead {
   insuranceExpiryDate: string | null;
   daysUntilExpiry: number | null;
   pendingReason: string | null;
+  // Insurer on the policy being cancelled.
+  insuranceCompany: string | null;
 }
 
 export interface InsuranceLeadsResult {

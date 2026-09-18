@@ -294,7 +294,7 @@ class FmcsaLeadsService {
     const safety = safetyCode(filters.minSafety);
     // Bump the version whenever the lead rules change so cached lists from the
     // previous rules aren't served for up to an hour after a deploy.
-    const cacheKey = `insurance_leads:fmcsa:v7:${JSON.stringify({
+    const cacheKey = `insurance_leads:fmcsa:v8:${JSON.stringify({
       windowDays,
       state,
       minUnits: filters.minUnits ?? null,
@@ -470,6 +470,7 @@ class FmcsaLeadsService {
         insuranceExpiryDate: expiry,
         daysUntilExpiry: expiry ? daysUntil(expiry) : null,
         pendingReason: status,
+        insuranceCompany: (cancellation.insurance_company_name || '').trim() || null,
       });
     }
 
@@ -494,7 +495,7 @@ class FmcsaLeadsService {
     const wanted = Array.from(new Set(dots.map((d) => String(d).trim()).filter(Boolean)));
     if (wanted.length === 0) return new Map();
 
-    const cacheKey = `insurance_snapshot:v1:${wanted.slice().sort().join(',')}`;
+    const cacheKey = `insurance_snapshot:v2:${wanted.slice().sort().join(',')}`;
     try {
       const cached = await cacheService.get<Array<[string, InsuranceSnapshot]>>(cacheKey);
       if (cached) return new Map(cached);
@@ -541,7 +542,7 @@ class FmcsaLeadsService {
     for (const dot of wanted) {
       const cancellation = governingCancellation(historyByDot.get(dot) || [], todayStamp);
       if (!cancellation) {
-        out.set(dot, { status: 'COVERED', cancellationDate: null, daysUntilCancellation: null });
+        out.set(dot, { status: 'COVERED', cancellationDate: null, daysUntilCancellation: null, insuranceCompany: null });
         continue;
       }
       const status = verdict(cancellation, activeByDot.get(dot) || [], todayStamp);
@@ -552,6 +553,7 @@ class FmcsaLeadsService {
         // insurer swap on a covered carrier would read as a warning it isn't.
         cancellationDate: status === 'COVERED' ? null : iso,
         daysUntilCancellation: status === 'COVERED' || !iso ? null : daysUntil(iso),
+        insuranceCompany: status === 'COVERED' ? null : (cancellation.insurance_company_name || '').trim() || null,
       });
     }
 
