@@ -45,6 +45,7 @@ const BUYER_FILTER_KEYS = new Set([
   'safetyRating',
   'name',
   'insuranceExpiresWithinDays',
+  'insuranceLeadType',
 ]);
 
 // Broker / Admin tiers get these on top of the buyer set.
@@ -116,6 +117,10 @@ function toRow(c: any) {
   };
 }
 
+function leadTypeFrom(v: unknown): InsuranceLeadFilters['leadType'] {
+  return v === 'cancellation' || v === 'renewal' ? v : 'all';
+}
+
 // An insurance search can't go to LINQ: probed live, its `insurance_cancels_*`
 // filter returns a fraction of what FMCSA itself lists (3 against 112 for Illinois
 // in a 30-day window). Insurance searches run against FMCSA's feed — the same code
@@ -123,6 +128,7 @@ function toRow(c: any) {
 function insuranceFiltersFrom(q: Record<string, unknown>): InsuranceLeadFilters {
   return {
     expiringWithinDays: parseInt10(q.insuranceExpiresWithinDays, 30),
+    leadType: leadTypeFrom(q.insuranceLeadType),
     state: q.state ? String(q.state).toUpperCase() : undefined,
     minUnits: q.minFleet ? parseInt10(q.minFleet, 0) : undefined,
     maxUnits: q.maxFleet ? parseInt10(q.maxFleet, Number.MAX_SAFE_INTEGER) : undefined,
@@ -144,7 +150,10 @@ function leadToRow(l: InsuranceLead) {
     // FMCSA lead rows are active carriers with an active operating authority.
     authorityStatus: 'ACTIVE',
     safetyRating: l.safetyRating,
-    insuranceCancellationDate: l.insuranceExpiryDate,
+    // A renewal isn't a cancellation: its date travels separately so the
+    // pipeline's "cancelling this week" count never picks it up.
+    insuranceCancellationDate: l.pendingReason === 'RENEWAL_DUE' ? null : l.insuranceExpiryDate,
+    insuranceRenewalDate: l.pendingReason === 'RENEWAL_DUE' ? l.insuranceExpiryDate : null,
     insuranceStatus: l.pendingReason,
     insuranceCompany: l.insuranceCompany,
     // Public FMCSA census contact — every tier gets it with the row.
@@ -174,7 +183,8 @@ async function withInsurance<T extends { dotNumber: string }>(rows: T[]) {
       ...row,
       insuranceCancellationDate: snap?.cancellationDate ?? null,
       insuranceStatus: snap?.status ?? null,
-      insuranceCompany: snap?.insuranceCompany ?? null,
+      insuranceCompany: snap?.insuranceCompany ?? snap?.renewalCompany ?? null,
+      insuranceRenewalDate: snap?.renewalDate ?? null,
     };
   });
 }
@@ -414,6 +424,7 @@ const BASE_CSV_COLUMNS = [
   'insurance_cancellation_date',
   'insurance_status',
   'insurance_company',
+  'insurance_renewal_date',
 ];
 
 function rowFromCarrier(c: any): Record<string, unknown> {
@@ -429,6 +440,7 @@ function rowFromCarrier(c: any): Record<string, unknown> {
     insurance_cancellation_date: '',
     insurance_status: '',
     insurance_company: '',
+    insurance_renewal_date: '',
   };
 }
 
@@ -442,9 +454,10 @@ function rowFromLead(l: InsuranceLead): Record<string, unknown> {
     total_drivers: '',
     authority_status: 'ACTIVE',
     safety_rating: l.safetyRating,
-    insurance_cancellation_date: l.insuranceExpiryDate || '',
+    insurance_cancellation_date: l.pendingReason === 'RENEWAL_DUE' ? '' : l.insuranceExpiryDate || '',
     insurance_status: l.pendingReason || '',
     insurance_company: l.insuranceCompany || '',
+    insurance_renewal_date: l.pendingReason === 'RENEWAL_DUE' ? l.insuranceExpiryDate || '' : '',
     phone: l.phone || '',
     email: l.email || '',
   };
@@ -459,7 +472,8 @@ async function csvRowsWithInsurance(rows: Array<Record<string, unknown>>) {
     const snap = snapshots.get(String(row.dot_number));
     row.insurance_cancellation_date = snap?.cancellationDate || '';
     row.insurance_status = snap?.status || '';
-    row.insurance_company = snap?.insuranceCompany || '';
+    row.insurance_company = snap?.insuranceCompany || snap?.renewalCompany || '';
+    row.insurance_renewal_date = snap?.renewalDate || '';
   }
   return rows;
 }

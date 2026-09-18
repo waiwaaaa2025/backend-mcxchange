@@ -52,7 +52,9 @@ const APP_TOKEN = process.env.FMCSA_SOCRATA_APP_TOKEN || '';
 // `dot_number in (...)` lists — 150 keeps the query string well under Socrata's limit.
 const DOT_CHUNK = 150;
 // Chunks run concurrently in small batches so a wide search doesn't burst the API.
-const CHUNK_CONCURRENCY = 4;
+// Renewal searches touch ~5,500 carriers for 30 days, so this also has to keep a
+// cold search inside Heroku's 30-second request limit.
+const CHUNK_CONCURRENCY = 8;
 
 // Liability coverage files under 'BIPD', and under 'BIPD CANCELLATION' on a small
 // number of rows; matching only the exact string silently drops those carriers.
@@ -104,10 +106,14 @@ interface CensusRow {
 
 interface ActivePolicyRow {
   usdot_number?: string;
+  docket_number?: string;
   policy_no?: string;
   effective_date?: string;
   trans_date?: string;
+  insurance_company_name?: string;
 }
+
+const ACTIVE_SELECT = 'usdot_number, docket_number, policy_no, effective_date, trans_date, insurance_company_name';
 
 // The two datasets punctuate the same policy differently ("02TRM069061-01" in one,
 // "02TRM06906101" in the other), so compare on alphanumerics only.
@@ -124,6 +130,61 @@ function normalizePolicy(value: string | undefined): string {
  */
 function filingKey(policyNo: string | undefined, effectiveDate: string | undefined): string {
   return `${normalizePolicy(policyNo)}|${(effectiveDate || '').trim()}`;
+}
+
+function isLeapYear(year: number): boolean {
+  return (year % 4 === 0 && year % 100 !== 0) || year % 400 === 0;
+}
+
+/**
+ * The next anniversary (YYYYMMDD, today or later) of a filing's effective date —
+ * our estimate of the policy's renewal date. FMCSA publishes no expiration date:
+ * BMC-91X filings run until cancelled, and liability policies are almost always
+ * annual terms that start on the filing's effective date.
+ */
+function nextAnniversary(effectiveStamp: string, todayStamp: string): string | null {
+  if (!/^\d{8}$/.test(effectiveStamp)) return null;
+  const md = effectiveStamp.slice(4);
+  let year = Number(todayStamp.slice(0, 4));
+  const at = (y: number) => `${y}${md === '0229' && !isLeapYear(y) ? '0228' : md}`;
+  if (at(year) < todayStamp) year += 1;
+  return at(year);
+}
+
+/** The carrier's current filing: the most recently effective active BIPD filing. */
+function currentFiling(activeRows: ActivePolicyRow[], todayStamp: string): ActivePolicyRow | null {
+  let best: ActivePolicyRow | null = null;
+  for (const row of activeRows) {
+    const eff = (row.effective_date || '').trim();
+    if (!normalizePolicy(row.policy_no) || !/^\d{8}$/.test(eff) || eff > todayStamp) continue;
+    if (!best || eff > (best.effective_date || '').trim()) best = row;
+  }
+  return best;
+}
+
+/**
+ * Renewal date for a covered carrier, or null. Only filings at least a year old
+ * count — a filing that started this year hasn't reached its first renewal.
+ */
+function renewalStampFor(activeRows: ActivePolicyRow[], todayStamp: string): { stamp: string; filing: ActivePolicyRow } | null {
+  const filing = currentFiling(activeRows, todayStamp);
+  if (!filing) return null;
+  const eff = (filing.effective_date || '').trim();
+  const stamp = nextAnniversary(eff, todayStamp);
+  if (!stamp || stamp.slice(0, 4) <= eff.slice(0, 4)) return null;
+  return { stamp, filing };
+}
+
+/** Every MMDD from today through the window end — matched against effective dates. */
+function monthDaysInWindow(today: Date, windowDays: number): string[] {
+  const out = new Set<string>();
+  for (let i = 0; i <= windowDays; i++) {
+    const md = yyyymmdd(new Date(today.getTime() + i * 86_400_000)).slice(4);
+    out.add(md);
+    // Feb 29 filings renew on Feb 28 in common years.
+    if (md === '0228') out.add('0229');
+  }
+  return Array.from(out);
 }
 
 function yyyymmdd(date: Date): string {
@@ -313,7 +374,9 @@ class FmcsaLeadsService {
     const safety = safetyCode(filters.minSafety);
     // Bump the version whenever the lead rules change so cached lists from the
     // previous rules aren't served for up to an hour after a deploy.
-    const cacheKey = `insurance_leads:fmcsa:v10:${JSON.stringify({
+    const leadType = filters.leadType === 'cancellation' || filters.leadType === 'renewal' ? filters.leadType : 'all';
+    const cacheKey = `insurance_leads:fmcsa:v11:${JSON.stringify({
+      leadType,
       windowDays,
       state,
       minUnits: filters.minUnits ?? null,
@@ -329,7 +392,7 @@ class FmcsaLeadsService {
       if (leads) {
         logger.info(`Insurance leads cache HIT (${cacheKey})`);
       } else {
-        leads = await this.buildLeads({ windowDays, state, safety, filters });
+        leads = await this.buildLeads({ leadType, windowDays, state, safety, filters });
         if (!leads) return null;
         await cacheService.set(cacheKey, leads, 3600);
       }
@@ -350,11 +413,13 @@ class FmcsaLeadsService {
   }
 
   private async buildLeads({
+    leadType,
     windowDays,
     state,
     safety,
     filters,
   }: {
+    leadType: 'all' | 'cancellation' | 'renewal';
     windowDays: number;
     state: string | null;
     safety: string | null;
@@ -364,18 +429,38 @@ class FmcsaLeadsService {
     const todayStamp = yyyymmdd(today);
     const windowEndStamp = yyyymmdd(new Date(today.getTime() + windowDays * 86_400_000));
 
-    // 1. Every BIPD cancellation notice dated from today to the end of the window.
-    //    This only nominates candidates; which cancellation governs is settled in
-    //    step 3, against the carrier's whole history rather than this slice.
-    const candidates = await socrata<CancellationRow>(DATASET_CANCELLATIONS, {
-      $select: 'usdot_number',
-      $where: `${BIPD_TYPES} AND filing_status_reason='CANCEL' AND cancl_effective_date >= '${todayStamp}' AND cancl_effective_date <= '${windowEndStamp}'`,
-      $limit: '50000',
-    });
-    if (!candidates) return null;
+    const wantCancellations = leadType !== 'renewal';
+    const wantRenewals = leadType !== 'cancellation';
 
+    // 1a. Every BIPD cancellation notice dated from today to the end of the window.
+    //     This only nominates candidates; which cancellation governs is settled in
+    //     step 3, against the carrier's whole history rather than this slice.
+    // 1b. Every active BIPD filing whose anniversary falls inside the window — the
+    //     carriers coming up for renewal. Also only nominees; step 5 checks that the
+    //     filing is still the carrier's current one.
+    const [cancelRows, renewalRows] = await Promise.all([
+      wantCancellations
+        ? socrata<CancellationRow>(DATASET_CANCELLATIONS, {
+            $select: 'usdot_number',
+            $where: `${BIPD_TYPES} AND filing_status_reason='CANCEL' AND cancl_effective_date >= '${todayStamp}' AND cancl_effective_date <= '${windowEndStamp}'`,
+            $limit: '50000',
+          })
+        : Promise.resolve([] as CancellationRow[]),
+      wantRenewals
+        ? socrata<ActivePolicyRow>(DATASET_ACTIVE_POLICIES, {
+            $select: 'usdot_number',
+            $where: `${ACTIVE_BIPD} AND effective_date < '${todayStamp}' AND (${monthDaysInWindow(today, windowDays)
+              .map((md) => `effective_date like '____${md}'`)
+              .join(' OR ')})`,
+            $limit: '200000',
+          }, 60_000)
+        : Promise.resolve([] as ActivePolicyRow[]),
+    ]);
+    if (!cancelRows || !renewalRows) return null;
+
+    const cancelDots = new Set(cancelRows.map((row) => (row.usdot_number || '').trim()).filter(Boolean));
     const candidateDots = Array.from(
-      new Set(candidates.map((row) => (row.usdot_number || '').trim()).filter(Boolean))
+      new Set([...cancelDots, ...renewalRows.map((row) => (row.usdot_number || '').trim()).filter(Boolean)])
     );
     if (candidateDots.length === 0) return [];
 
@@ -421,7 +506,8 @@ class FmcsaLeadsService {
     // 3. The carrier's full cancellation history, not just the window: a carrier with
     //    a cancellation past the window edge would otherwise be judged on an older,
     //    already-replaced one and reported as lapsed while still insured.
-    const history = await overDotChunks<CancellationRow>(Array.from(carriers.keys()), (chunk) =>
+    //    Only the carriers nominated by a cancellation need it.
+    const history = await overDotChunks<CancellationRow>(Array.from(carriers.keys()).filter((d) => cancelDots.has(d)), (chunk) =>
       socrata<CancellationRow>(DATASET_CANCELLATIONS, {
         $select: CANCELLATION_SELECT,
         $where: `${BIPD_TYPES} AND usdot_number in (${quoteList(chunk)})`,
@@ -441,7 +527,7 @@ class FmcsaLeadsService {
     // 4. What the carrier has on file right now.
     const activePolicies = await overDotChunks<ActivePolicyRow>(Array.from(carriers.keys()), (chunk) =>
       socrata<ActivePolicyRow>(DATASET_ACTIVE_POLICIES, {
-        $select: 'usdot_number, policy_no, effective_date, trans_date',
+        $select: ACTIVE_SELECT,
         $where: `${ACTIVE_BIPD} AND usdot_number in (${quoteList(chunk)})`,
         $limit: String(DOT_CHUNK * 20),
       })
@@ -493,12 +579,44 @@ class FmcsaLeadsService {
         daysUntilExpiry: expiry ? daysUntil(expiry) : null,
         pendingReason: status,
         insuranceCompany: (cancellation.insurance_company_name || '').trim() || null,
+        policyEffectiveDate: isoFromYyyymmdd((cancellation.effective_date || '').trim()),
       });
     }
 
-    // Soonest cancellation first.
+    // 5. Renewals: covered carriers whose current filing turns a year older inside
+    //    the window. A carrier already listed for a cancellation isn't repeated.
+    if (wantRenewals) {
+      const listed = new Set(leads.map((l) => l.dotNumber));
+      for (const [dot, carrier] of carriers) {
+        if (listed.has(dot)) continue;
+        const renewal = renewalStampFor(activeByDot.get(dot) || [], todayStamp);
+        if (!renewal || renewal.stamp > windowEndStamp) continue;
+
+        const expiry = isoFromYyyymmdd(renewal.stamp);
+        leads.push({
+          dotNumber: dot,
+          mcNumber: displayDocket(carrier, (renewal.filing.docket_number || '').trim()),
+          legalName: carrier.legal_name || carrier.dba_name || `DOT ${dot}`,
+          state: carrier.phy_state || null,
+          powerUnits: carrier.power_units != null ? Number(carrier.power_units) : null,
+          safetyRating: safetyLabel(carrier.safety_rating),
+          phone: formatPhone(carrier.phone),
+          email: (carrier.email_address || '').trim() || null,
+          insuranceStatus: 'expiring',
+          insuranceExpiryDate: expiry,
+          daysUntilExpiry: expiry ? daysUntil(expiry) : null,
+          pendingReason: 'RENEWAL_DUE',
+          insuranceCompany: (renewal.filing.insurance_company_name || '').trim() || null,
+          policyEffectiveDate: isoFromYyyymmdd((renewal.filing.effective_date || '').trim()),
+        });
+      }
+    }
+
+    // Pending cancellations first — coverage actually stops — then renewals; each
+    // soonest first.
     leads.sort(
       (a, b) =>
+        Number(a.pendingReason === 'RENEWAL_DUE') - Number(b.pendingReason === 'RENEWAL_DUE') ||
         (a.daysUntilExpiry ?? Infinity) - (b.daysUntilExpiry ?? Infinity) ||
         a.dotNumber.localeCompare(b.dotNumber)
     );
@@ -517,7 +635,7 @@ class FmcsaLeadsService {
     const wanted = Array.from(new Set(dots.map((d) => String(d).trim()).filter(Boolean)));
     if (wanted.length === 0) return new Map();
 
-    const cacheKey = `insurance_snapshot:v4:${wanted.slice().sort().join(',')}`;
+    const cacheKey = `insurance_snapshot:v5:${wanted.slice().sort().join(',')}`;
     try {
       const cached = await cacheService.get<Array<[string, InsuranceSnapshot]>>(cacheKey);
       if (cached) return new Map(cached);
@@ -538,7 +656,7 @@ class FmcsaLeadsService {
 
     const activePolicies = await overDotChunks<ActivePolicyRow>(wanted, (chunk) =>
       socrata<ActivePolicyRow>(DATASET_ACTIVE_POLICIES, {
-        $select: 'usdot_number, policy_no, effective_date, trans_date',
+        $select: ACTIVE_SELECT,
         $where: `${ACTIVE_BIPD} AND usdot_number in (${quoteList(chunk)})`,
         $limit: String(DOT_CHUNK * 20),
       })
@@ -560,11 +678,21 @@ class FmcsaLeadsService {
       activeByDot.get(dot)!.push(row);
     }
 
+    // Covered carriers also get their estimated renewal date, so a renewal lead
+    // reads the same in the Leads / Lead Generator insurance column.
+    const renewalFor = (dot: string) => {
+      const renewal = renewalStampFor(activeByDot.get(dot) || [], todayStamp);
+      return {
+        renewalDate: renewal ? isoFromYyyymmdd(renewal.stamp) : null,
+        renewalCompany: renewal ? (renewal.filing.insurance_company_name || '').trim() || null : null,
+      };
+    };
+
     const out = new Map<string, InsuranceSnapshot>();
     for (const dot of wanted) {
       const cancellation = governingCancellation(historyByDot.get(dot) || [], todayStamp);
       if (!cancellation) {
-        out.set(dot, { status: 'COVERED', cancellationDate: null, daysUntilCancellation: null, insuranceCompany: null });
+        out.set(dot, { status: 'COVERED', cancellationDate: null, daysUntilCancellation: null, insuranceCompany: null, ...renewalFor(dot) });
         continue;
       }
       const status = verdict(cancellation, activeByDot.get(dot) || [], todayStamp);
@@ -576,6 +704,7 @@ class FmcsaLeadsService {
         cancellationDate: status === 'COVERED' ? null : iso,
         daysUntilCancellation: status === 'COVERED' || !iso ? null : daysUntil(iso),
         insuranceCompany: status === 'COVERED' ? null : (cancellation.insurance_company_name || '').trim() || null,
+        ...(status === 'COVERED' ? renewalFor(dot) : { renewalDate: null, renewalCompany: null }),
       });
     }
 

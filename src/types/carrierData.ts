@@ -22,6 +22,8 @@ export interface MorProCarrierReport {
 export interface InsuranceLeadFilters {
   insuranceStatus?: 'pending' | 'expiring';
   expiringWithinDays?: number;
+  // 'cancellation' = pending cancellation only, 'renewal' = renewal due only.
+  leadType?: 'all' | 'cancellation' | 'renewal';
   state?: string;
   minUnits?: number;
   maxUnits?: number;
@@ -39,6 +41,9 @@ export interface InsuranceSnapshot {
   cancellationDate: string | null;   // ISO; null unless a cancellation actually bites
   daysUntilCancellation: number | null;
   insuranceCompany: string | null;   // insurer on that policy; null when COVERED
+  // COVERED only: estimated renewal (anniversary of the current filing) and insurer.
+  renewalDate?: string | null;
+  renewalCompany?: string | null;
 }
 
 /** Public FMCSA census contact for a carrier. */
@@ -61,8 +66,10 @@ export interface InsuranceLead {
   insuranceExpiryDate: string | null;
   daysUntilExpiry: number | null;
   pendingReason: string | null;
-  // Insurer on the policy being cancelled.
+  // Insurer on the policy being cancelled / renewed.
   insuranceCompany: string | null;
+  // When that policy's current filing took effect (ISO).
+  policyEffectiveDate?: string | null;
 }
 
 export interface InsuranceLeadsResult {

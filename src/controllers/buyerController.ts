@@ -956,6 +956,7 @@ export const getInsuranceLeads = asyncHandler(async (req: AuthRequest, res: Resp
   const filters: InsuranceLeadFilters = {
     insuranceStatus: statusParam === 'expiring' ? 'expiring' : 'pending',
     expiringWithinDays: q.expiringWithinDays ? parseIntParam(q.expiringWithinDays as string) : undefined,
+    leadType: q.leadType === 'cancellation' || q.leadType === 'renewal' ? q.leadType : 'all',
     state: q.state ? String(q.state).toUpperCase() : undefined,
     minUnits: q.minUnits ? parseIntParam(q.minUnits as string) : undefined,
     maxUnits: q.maxUnits ? parseIntParam(q.maxUnits as string) : undefined,
