@@ -8,6 +8,7 @@ import morproLinqService, {
   type LinqCarrierRow,
 } from '../services/morproLinqService';
 import fmcsaLeadsService from '../services/fmcsaLeadsService';
+import fmcsaNewCarriersService, { type NewCarrierFilters } from '../services/fmcsaNewCarriersService';
 import type { InsuranceLead, InsuranceLeadFilters } from '../types/carrierData';
 import { logLeadActivity, type LeadActivityKind } from '../services/leadActivity.service';
 import logger from '../utils/logger';
@@ -643,4 +644,69 @@ export async function listReps(_req: Request, res: Response) {
     order: [['name', 'ASC']],
   });
   res.json({ success: true, data: reps });
+}
+
+// ---------------------------------------------------------------------------
+// New Carriers — brand-new DOT registrations from the FMCSA census, with email.
+// ---------------------------------------------------------------------------
+
+function newCarrierFiltersFrom(q: Request['query']): NewCarrierFilters {
+  const flag = (v: unknown) => v === 'true' || v === '1';
+  return {
+    days: q.days ? parseInt10(q.days, 30) : 30,
+    state: q.state ? String(q.state) : null,
+    name: q.name ? String(q.name) : null,
+    forHireOnly: flag(q.forHireOnly),
+    withMcOnly: flag(q.withMcOnly),
+    // Default on: the point of the tab is carriers you can email.
+    emailOnly: q.emailOnly == null ? true : flag(q.emailOnly),
+  };
+}
+
+// GET /api/admin/leads/new-carriers?days=30&state=&name=&forHireOnly=&withMcOnly=&emailOnly=&offset=&limit=
+export async function searchNewCarriers(req: Request, res: Response) {
+  const result = await fmcsaNewCarriersService.search(
+    newCarrierFiltersFrom(req.query),
+    parseInt10(req.query.offset, 0),
+    parseInt10(req.query.limit, 50)
+  );
+  if (!result) {
+    return res.status(502).json({ success: false, error: 'FMCSA census is unavailable right now — try again shortly' });
+  }
+  res.json({ success: true, data: result });
+}
+
+// GET /api/admin/leads/new-carriers/export.csv?...same filters  (&format=emails → one email per line)
+export async function exportNewCarriersCsv(req: Request, res: Response) {
+  const rows = await fmcsaNewCarriersService.exportAll(newCarrierFiltersFrom(req.query));
+  if (!rows) {
+    return res.status(502).json({ success: false, error: 'FMCSA census is unavailable right now — try again shortly' });
+  }
+  const date = new Date().toISOString().slice(0, 10);
+
+  if (req.query.format === 'emails') {
+    const emails = Array.from(new Set(rows.map((r) => r.email).filter((e): e is string => !!e)));
+    res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+    return res.send(emails.join('\n'));
+  }
+
+  const headers = [
+    'dot_number', 'mc_number', 'legal_name', 'dba_name', 'registered_date', 'city', 'state',
+    'power_units', 'drivers', 'for_hire', 'officer', 'phone', 'email',
+  ];
+  const escape = (v: unknown) => {
+    if (v == null) return '';
+    const s = String(v);
+    return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+  };
+  const lines = [headers.join(',')];
+  for (const r of rows) {
+    lines.push([
+      r.dotNumber, r.mcNumber, r.legalName, r.dbaName, r.registeredDate, r.city, r.state,
+      r.powerUnits, r.drivers, r.forHire ? 'yes' : 'no', r.officer, r.phone, r.email,
+    ].map(escape).join(','));
+  }
+  res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+  res.setHeader('Content-Disposition', `attachment; filename="new-carriers-${date}.csv"`);
+  res.send(lines.join('\n'));
 }

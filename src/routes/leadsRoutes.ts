@@ -12,6 +12,8 @@ import {
   getLeadActivity,
   logLeadActivityHttp,
   getPipelineStats,
+  searchNewCarriers,
+  exportNewCarriersCsv,
 } from '../controllers/leadsController';
 
 const router = Router();
@@ -23,6 +25,10 @@ router.use(adminOnly);
 router.get('/carriers/search', searchCarriers);
 router.get('/carriers/export.csv', exportCarriersCsv);
 router.get('/carriers/:dot', getCarrierDetail);
+
+// Brand-new DOT registrations (FMCSA census) with contact email
+router.get('/new-carriers', searchNewCarriers);
+router.get('/new-carriers/export.csv', exportNewCarriersCsv);
 
 // Saved leads
 router.get('/', listLeads);

@@ -156,7 +156,7 @@ function displayDocket(carrier: CensusRow, filingDocket: string): string | null 
   return preferred ? preferred.docket : filing || null;
 }
 
-function formatPhone(value: string | undefined): string | null {
+export function formatPhone(value: string | undefined): string | null {
   const digits = (value || '').replace(/\D/g, '');
   if (digits.length === 10) return `(${digits.slice(0, 3)}) ${digits.slice(3, 6)}-${digits.slice(6)}`;
   if (digits.length === 11 && digits.startsWith('1')) return formatPhone(digits.slice(1));
@@ -230,7 +230,7 @@ function verdict(
   return hasAnyPolicy ? 'COVERED' : 'CANCELLATION_SCHEDULED';
 }
 
-async function socrata<T>(dataset: string, params: Record<string, string>, timeoutMs = 20_000): Promise<T[] | null> {
+export async function socrata<T>(dataset: string, params: Record<string, string>, timeoutMs = 20_000): Promise<T[] | null> {
   const query = new URLSearchParams(params).toString();
   const url = `${SOCRATA_BASE}/${dataset}.json?${query}`;
   const controller = new AbortController();
