@@ -82,6 +82,10 @@ describe('sanitizeListing', () => {
     contactEmail: 'seller@example.com',
     contactPhone: '555-0100',
     fmcsaData: REAL_SNAPSHOT,
+    legalName: 'CANTY ENTERPRISES INC',
+    dbaName: 'CANTY TRUCKING',
+    address: '12424 PINE VALLEY CLUB DR, CHARLOTTE, NC',
+    city: 'CHARLOTTE',
     askingPrice: '15000.00',
     state: 'NC',
   };
@@ -102,6 +106,23 @@ describe('sanitizeListing', () => {
     expect(out.contactEmail).toBeNull();
     expect(out.contactPhone).toBeNull();
     expect(JSON.stringify(out)).not.toContain('seller@example.com');
+  });
+
+  it('withholds the name and street address, which lead straight back to the MC', () => {
+    const out = sanitizeListing(listing);
+
+    expect(out.legalName).toBeNull();
+    expect(out.dbaName).toBeNull();
+    expect(out.address).toBeNull();
+    expect(JSON.stringify(out)).not.toContain('CANTY');
+    expect(JSON.stringify(out)).not.toContain('PINE VALLEY');
+  });
+
+  it('keeps city and state, which the cards show', () => {
+    const out = sanitizeListing(listing);
+
+    expect(out.city).toBe('CHARLOTTE');
+    expect(out.state).toBe('NC');
   });
 
   it('never emits _realDotNumber', () => {

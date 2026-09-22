@@ -94,6 +94,15 @@ export function sanitizeListing(listing: any): any {
   safe.contactEmail = null;
   safe.contactPhone = null;
 
+  // Masking the numbers accomplishes nothing while the name and street address
+  // travel in clear — either one is a single public FMCSA lookup away from the
+  // MC. No public page renders them; buyerController already withholds
+  // legalName the same way for unmatched buyers. City/state stay: the cards
+  // show them and they are too coarse to identify a carrier.
+  safe.legalName = null;
+  safe.dbaName = null;
+  safe.address = null;
+
   // Belt and braces: never let an unmasked DOT ride along under another name.
   delete safe._realDotNumber;
 
