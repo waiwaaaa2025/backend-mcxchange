@@ -1010,6 +1010,56 @@ class EmailService {
         `,
       },
 
+      'admin-scrape-activity': {
+        subject: 'Possible scraping - {{flaggedCount}} client(s) flagged',
+        html: `
+          <!DOCTYPE html>
+          <html>
+          <head>${baseStyles}</head>
+          <body>
+            <div class="container">
+              <div class="header" style="background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%);">
+                <h1>Possible Scraping Detected</h1>
+              </div>
+              <div class="content">
+                <h2>Admin Alert</h2>
+                <p>
+                  {{flaggedCount}} of {{totalClients}} client(s) reading the marketplace in the
+                  last {{windowHours}} hours look automated.
+                </p>
+                <table style="width:100%;border-collapse:collapse;margin:15px 0;font-size:14px">
+                  <thead>
+                    <tr style="text-align:left;color:#6b7280">
+                      <th style="padding:8px">Client</th>
+                      <th style="padding:8px;text-align:right">Reads</th>
+                      <th style="padding:8px;text-align:right">Listings</th>
+                      <th style="padding:8px;text-align:right">Searches</th>
+                      <th style="padding:8px">Why</th>
+                    </tr>
+                  </thead>
+                  <tbody>{{clientRows}}</tbody>
+                </table>
+                <p style="font-size:12px;color:#6b7280">
+                  These are heuristics, not proof — a scraper can forge a browser user agent and a
+                  shared office connection can look busy. MC numbers stay masked either way.
+                </p>
+                <a href="{{adminUrl}}" class="button">Open Access Activity</a>
+              </div>
+              <div class="footer">
+                <p>&copy; ${new Date().getFullYear()} Domilea - Admin Notification</p>
+              </div>
+            </div>
+          </body>
+          </html>
+        `,
+        text: `Possible scraping detected
+
+{{flaggedCount}} of {{totalClients}} client(s) reading the marketplace in the last {{windowHours}} hours look automated.
+
+{{clientText}}
+
+These are heuristics, not proof. Review: {{adminUrl}}`,
+      },
       'admin-dispute': {
         subject: 'Account Dispute Alert - {{userName}}',
         html: `
@@ -1509,6 +1559,18 @@ class EmailService {
   ): Promise<boolean> {
     if (!emails || emails.length === 0) return false;
     const template = this.compileTemplate('admin-dispute', data);
+    return this.sendToMultiple(emails, template.subject, template.html, template.text);
+  }
+
+  /**
+   * Send admin notification for possible catalogue scraping
+   */
+  async sendAdminScrapeActivityNotification(
+    emails: string[],
+    data: Record<string, any>
+  ): Promise<boolean> {
+    if (!emails || emails.length === 0) return false;
+    const template = this.compileTemplate('admin-scrape-activity', data);
     return this.sendToMultiple(emails, template.subject, template.html, template.text);
   }
 

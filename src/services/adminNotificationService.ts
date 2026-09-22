@@ -218,6 +218,65 @@ class AdminNotificationService {
   }
 
   /**
+   * Notify admins that the daily scrape watch flagged one or more clients.
+   * Only called when there is something to report — see scrapeWatchService.
+   */
+  async notifyScrapeActivity(data: {
+    windowHours: number;
+    totalClients: number;
+    clients: Array<{
+      ipAddress: string;
+      requests: number;
+      listingsTouched: number;
+      searches: number;
+      userAgent: string;
+      reasons: string[];
+    }>;
+  }): Promise<void> {
+    try {
+      const [emails, enabled] = await Promise.all([
+        this.getAdminEmails(),
+        this.isNotificationEnabled('notify_scrape_activity'),
+      ]);
+
+      if (!enabled || emails.length === 0) {
+        return;
+      }
+
+      await emailService.sendAdminScrapeActivityNotification(emails, {
+        windowHours: data.windowHours,
+        flaggedCount: data.clients.length,
+        totalClients: data.totalClients,
+        // Pre-rendered: the template engine is simple variable replacement,
+        // with no loop construct to iterate the client list.
+        clientRows: data.clients
+          .map(
+            (c) =>
+              `<tr>
+                 <td style="padding:8px;border-bottom:1px solid #e5e7eb;font-family:monospace">${c.ipAddress}</td>
+                 <td style="padding:8px;border-bottom:1px solid #e5e7eb;text-align:right">${c.requests}</td>
+                 <td style="padding:8px;border-bottom:1px solid #e5e7eb;text-align:right">${c.listingsTouched}</td>
+                 <td style="padding:8px;border-bottom:1px solid #e5e7eb;text-align:right">${c.searches}</td>
+                 <td style="padding:8px;border-bottom:1px solid #e5e7eb;font-size:12px;color:#6b7280">${c.reasons.join(', ')}<br>${c.userAgent}</td>
+               </tr>`
+          )
+          .join(''),
+        clientText: data.clients
+          .map(
+            (c) =>
+              `${c.ipAddress} — ${c.requests} reads, ${c.listingsTouched} listings, ${c.searches} searches\n  ${c.reasons.join(', ')}\n  ${c.userAgent}`
+          )
+          .join('\n\n'),
+        adminUrl: `${this.frontendUrl}/admin/access-activity`,
+      });
+
+      logger.info(`Admin notification sent: Scrape activity - ${data.clients.length} client(s) flagged`);
+    } catch (error) {
+      logger.error('Failed to send scrape activity admin notification:', error);
+    }
+  }
+
+  /**
    * Notify admins of new consultation request
    */
   async notifyConsultation(data: {

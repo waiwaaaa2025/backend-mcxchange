@@ -22,6 +22,7 @@ import { authService } from './services/authService';
 import { expireOverdueBundleAccess } from './services/buyerGuideService';
 import './agents'; // triggers AgentRegistry.register(...) side effects
 import { purgeOldListingAccessLogs } from './utils/listingAccessLog';
+import { scrapeWatchService } from './services/scrapeWatchService';
 import { startAgentWorker } from './workers/agentJobs.worker';
 import { seedAgentCatalog } from './services/agentRegistration.service';
 import { registerScoutTasks } from './agents/scout/registerTasks';
@@ -243,6 +244,22 @@ const startServer = async () => {
         logger.error('Listing access log purge failed', { error });
       }
     }, 24 * 60 * 60 * 1000); // 24 hours
+
+    // Daily scrape watch. Asks the question the admin panel answers on demand,
+    // so a slow scrape nobody thinks to check for still surfaces. Silent unless
+    // a client trips the heuristic. Ticks every three hours and lets the service
+    // decide whether a day has passed — Heroku cycles dynos about daily, so a
+    // 24h interval would rarely live long enough to fire.
+    setInterval(async () => {
+      try {
+        const { flagged, scanned } = await scrapeWatchService.runDailyCheck();
+        if (flagged > 0) {
+          logger.warn('Scrape watch flagged clients', { flagged, scanned });
+        }
+      } catch (error) {
+        logger.error('Daily scrape watch failed', { error });
+      }
+    }, 3 * 60 * 60 * 1000); // every 3h; the service itself enforces once-a-day
 
     // Start listening
     httpServer.listen(config.port, () => {
