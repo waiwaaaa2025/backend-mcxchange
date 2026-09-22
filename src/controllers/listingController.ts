@@ -9,12 +9,34 @@ import { buyerPreferencesService } from '../services/buyerPreferencesService';
 import { scoreListing, hasAnyCriteria } from '../services/matchService';
 import { recordAccess } from '../utils/accessLog';
 import { AUTHORITY_TYPE_VALUES, requiresDotNumber } from '../utils/authority';
+import { sanitizeListing, redactCarrierIntel } from '../utils/listingSanitize';
+import { Listing } from '../models';
+import { fmcsaService } from '../services/fmcsaService';
+import { carrierDataService } from '../services/carrierDataService';
 
-// Mask an MC/DOT number: show first half, replace rest with bullets
-function maskNumber(num: string): string {
-  if (!num) return num;
-  const half = Math.ceil(num.length / 2);
-  return num.substring(0, half) + '•'.repeat(num.length - half);
+/**
+ * VIP listings are visible only to Premium subscribers (and grandfathered
+ * Enterprise), VIP / Deal Access Pass holders, admins, and the listing owner.
+ * Shared by the detail route and the carrier-intel route so the two cannot
+ * drift apart and leave intel reachable on a listing the body refuses to serve.
+ */
+async function viewerMayAccessVip(
+  req: AuthRequest,
+  listing: { isVip?: boolean; sellerId?: string }
+): Promise<boolean> {
+  if (!listing.isVip) return true;
+  // Anonymous viewers (optional auth) can never satisfy the subscription check.
+  if (!req.user) return false;
+  if (req.user.role === UserRole.ADMIN || listing.sellerId === req.user.id) return true;
+
+  const subscription = await Subscription.findOne({ where: { userId: req.user.id } });
+  return (
+    !!subscription &&
+    subscription.status === SubscriptionStatus.ACTIVE &&
+    (subscription.plan === SubscriptionPlan.PREMIUM ||
+      subscription.plan === SubscriptionPlan.ENTERPRISE ||
+      subscription.plan === SubscriptionPlan.VIP_ACCESS)
+  );
 }
 
 // Validation rules
@@ -78,31 +100,26 @@ export const getListings = asyncHandler(async (req: AuthRequest, res: Response) 
   const isAdmin = req.user?.role === UserRole.ADMIN;
   const isSeller = req.user?.role === UserRole.SELLER;
 
-  // Mask MC/DOT numbers for buyers who haven't unlocked
+  // Withhold carrier identity from anyone who hasn't unlocked the listing.
+  // Note the predicate is ownership, not the SELLER role: holding a seller
+  // account entitles you to your own listings, not to every other seller's.
   let listings = result.listings;
-  if (!isAdmin && !isSeller && userId) {
-    // Get all listing IDs this user has unlocked
-    const unlockedRecords = await UnlockedListing.findAll({
-      where: { userId },
-      attributes: ['listingId'],
-    });
-    const unlockedIds = new Set(unlockedRecords.map((u: any) => u.listingId));
+  if (!isAdmin) {
+    const unlockedIds = userId
+      ? new Set(
+          (
+            await UnlockedListing.findAll({
+              where: { userId },
+              attributes: ['listingId'],
+            })
+          ).map((u: any) => u.listingId)
+        )
+      : new Set<string>();
 
     listings = result.listings.map((l: any) => {
       const listing = l.toJSON ? l.toJSON() : { ...l };
-      if (!unlockedIds.has(listing.id)) {
-        listing.mcNumber = maskNumber(listing.mcNumber);
-        if (listing.dotNumber) listing.dotNumber = maskNumber(listing.dotNumber);
-      }
-      return listing;
-    });
-  } else if (!isAdmin && !isSeller && !userId) {
-    // Unauthenticated — mask everything
-    listings = result.listings.map((l: any) => {
-      const listing = l.toJSON ? l.toJSON() : { ...l };
-      listing.mcNumber = maskNumber(listing.mcNumber);
-      if (listing.dotNumber) listing.dotNumber = maskNumber(listing.dotNumber);
-      return listing;
+      const entitled = !!userId && (listing.sellerId === userId || unlockedIds.has(listing.id));
+      return entitled ? listing : sanitizeListing(listing);
     });
   }
 
@@ -137,40 +154,82 @@ export const getListing = asyncHandler(async (req: AuthRequest, res: Response) =
   const isOwner = req.user && listing.sellerId === req.user.id;
   const isAdmin = req.user?.role === UserRole.ADMIN;
 
-  // VIP listings are only accessible to Premium subscribers (and grandfathered Enterprise),
-  // VIP / Deal Access Pass holders, admins, and the listing owner.
-  if (listing.isVip && !isOwner && !isAdmin) {
-    // Anonymous viewers (optional auth) can never satisfy the subscription check —
-    // reject cleanly instead of dereferencing a missing user.
-    if (!req.user) {
-      res.status(403).json({ success: false, error: 'Premium subscription required to view VIP listings.', code: 'PREMIUM_REQUIRED' });
-      return;
-    }
-    const subscription = await Subscription.findOne({ where: { userId: req.user.id } });
-    if (
-      !subscription ||
-      subscription.status !== SubscriptionStatus.ACTIVE ||
-      (subscription.plan !== SubscriptionPlan.PREMIUM &&
-        subscription.plan !== SubscriptionPlan.ENTERPRISE &&
-        subscription.plan !== SubscriptionPlan.VIP_ACCESS)
-    ) {
-      res.status(403).json({ success: false, error: 'Premium subscription required to view VIP listings.', code: 'PREMIUM_REQUIRED' });
-      return;
-    }
+  if (!(await viewerMayAccessVip(req, listing))) {
+    res.status(403).json({ success: false, error: 'Premium subscription required to view VIP listings.', code: 'PREMIUM_REQUIRED' });
+    return;
   }
 
-  // Mask MC/DOT for display, but always include real DOT for carrier data fetching
-  const responseData = { ...listing };
-  if (!listing.isUnlocked && !isOwner && !isAdmin) {
-    // Keep real DOT in a separate field so frontend can fetch carrier intelligence
-    responseData._realDotNumber = responseData.dotNumber;
-    responseData.mcNumber = maskNumber(responseData.mcNumber);
-    if (responseData.dotNumber) responseData.dotNumber = maskNumber(responseData.dotNumber);
-  }
+  // Mask MC/DOT for display. The real DOT stays on the server — the detail page
+  // reaches carrier intelligence through /listings/:id/carrier-intel instead.
+  const entitled = listing.isUnlocked || isOwner || isAdmin;
+  const responseData = entitled ? { ...listing } : sanitizeListing(listing);
 
   res.json({
     success: true,
     data: responseData,
+  });
+});
+
+// Carrier intelligence for one listing, resolved server-side.
+//
+// The detail page shows FMCSA safety history for listings the viewer has not
+// unlocked. It used to do that by asking for the listing's real DOT and calling
+// the public /api/fmcsa/* routes itself, which handed every anonymous visitor
+// the identity the masking exists to withhold. The DOT never leaves the server
+// now; the client asks by listing id and gets back only the intelligence.
+export const getListingCarrierIntel = asyncHandler(async (req: AuthRequest, res: Response) => {
+  const { id } = req.params;
+
+  // Deliberately not listingService.getListingById — that increments `views`,
+  // and this fires alongside every detail render.
+  const listing = await Listing.findByPk(id, {
+    attributes: ['id', 'mcNumber', 'dotNumber', 'legalName', 'isVip', 'sellerId'],
+  });
+  if (!listing) {
+    res.status(404).json({ success: false, error: 'Listing not found' });
+    return;
+  }
+
+  if (!(await viewerMayAccessVip(req, listing))) {
+    res.status(403).json({ success: false, error: 'Premium subscription required to view VIP listings.', code: 'PREMIUM_REQUIRED' });
+    return;
+  }
+
+  const dot = (listing.dotNumber || '').replace(/\D/g, '');
+  if (!dot) {
+    res.json({ success: true, data: { carrierReport: null, sms: null, cargoTypes: [], authority: null, insurance: null } });
+    return;
+  }
+
+  // One slow or failing upstream shouldn't blank the whole panel.
+  const [carrierReport, sms, cargoTypes, authority, insurance] = await Promise.all([
+    carrierDataService.getFullReport(dot).catch(() => null),
+    fmcsaService.getSMSData(dot).catch(() => null),
+    fmcsaService.getCargoCarried(dot).catch(() => [] as string[]),
+    fmcsaService.getAuthorityHistory(dot).catch(() => null),
+    fmcsaService.getInsuranceHistory(dot).catch(() => null),
+  ]);
+
+  // The upstream report repeats the carrier's name, DOT, phone and email — the
+  // very fields the listing masks. Unlocking is what buys them.
+  const isAdmin = req.user?.role === UserRole.ADMIN;
+  const isOwner = !!req.user && listing.sellerId === req.user.id;
+  let entitled = isAdmin || isOwner;
+  if (!entitled && req.user) {
+    entitled = !!(await UnlockedListing.findOne({ where: { userId: req.user.id, listingId: id } }));
+  }
+
+  const bundle = { carrierReport, sms, cargoTypes, authority, insurance };
+
+  res.json({
+    success: true,
+    data: entitled
+      ? bundle
+      : redactCarrierIntel(bundle, {
+          mcNumber: listing.mcNumber,
+          dotNumber: listing.dotNumber,
+          legalName: listing.legalName,
+        }),
   });
 });
 

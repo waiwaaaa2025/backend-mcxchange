@@ -12,9 +12,11 @@ import {
   getMyListings,
   unlockListing,
   getUnlockedListings,
+  getListingCarrierIntel,
   createListingValidation,
 } from '../controllers/listingController';
 import { authenticate, optionalAuth, sellerOnly, buyerOnly, requireEnterpriseSubscription, requireActiveBilling } from '../middleware/auth';
+import { fmcsaLimiter } from '../middleware/rateLimiter';
 import validate from '../middleware/validate';
 
 const router = Router();
@@ -32,6 +34,11 @@ router.get('/unlocked', authenticate, buyerOnly, getUnlockedListings);
 // Single listing — optional auth: anonymous viewers get a masked public preview,
 // authenticated users get personalized/unlocked data (handled in the controller).
 router.get('/:id', optionalAuth, getListing);
+
+// Carrier intelligence, resolved from the listing's DOT server-side so the DOT
+// itself never reaches the client. Rate limited: one call fans out to five
+// upstream lookups, which is worth throttling on a route anonymous users reach.
+router.get('/:id/carrier-intel', optionalAuth, fmcsaLimiter, getListingCarrierIntel);
 
 // Seller routes
 router.post('/', authenticate, sellerOnly, validate(createListingValidation), createListing);
