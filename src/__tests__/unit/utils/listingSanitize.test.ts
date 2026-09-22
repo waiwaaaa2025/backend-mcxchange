@@ -118,6 +118,19 @@ describe('sanitizeListing', () => {
     expect(JSON.stringify(out)).not.toContain('PINE VALLEY');
   });
 
+  it('withholds the seller companyName, which repeats the carrier name', () => {
+    const out = sanitizeListing({
+      ...listing,
+      seller: { id: 's1', name: 'Patricia Canty', companyName: 'CANTY ENTERPRISES INC', trustScore: 70 },
+    });
+
+    expect(out.seller.companyName).toBeNull();
+    expect(JSON.stringify(out)).not.toContain('CANTY ENTERPRISES');
+    // The seller's display name is the point of the marketplace — it stays.
+    expect(out.seller.name).toBe('Patricia Canty');
+    expect(out.seller.trustScore).toBe(70);
+  });
+
   it('keeps city and state, which the cards show', () => {
     const out = sanitizeListing(listing);
 

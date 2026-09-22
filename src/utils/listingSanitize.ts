@@ -103,6 +103,13 @@ export function sanitizeListing(listing: any): any {
   safe.dbaName = null;
   safe.address = null;
 
+  // The seller's companyName is usually the carrier's legal name verbatim, so
+  // it reopens the same hole one level down. The seller's display name stays —
+  // knowing who you're buying from is the point of the marketplace.
+  if (safe.seller) {
+    safe.seller = { ...safe.seller, companyName: null };
+  }
+
   // Belt and braces: never let an unmasked DOT ride along under another name.
   delete safe._realDotNumber;
 
