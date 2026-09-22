@@ -261,6 +261,22 @@ const startServer = async () => {
       }
     }, 3 * 60 * 60 * 1000); // every 3h; the service itself enforces once-a-day
 
+    // Also run shortly after boot. setInterval's first tick is a full period
+    // away, so without this a deploy resets the clock — and deploying more
+    // often than every three hours would starve the check exactly the way a
+    // 24h timer would. The last-run mark makes this safe to fire on every
+    // boot: a deploy triggers a check rather than postponing one.
+    setTimeout(async () => {
+      try {
+        const { flagged, scanned, skipped } = await scrapeWatchService.runDailyCheck();
+        if (!skipped) {
+          logger.info('Scrape watch: startup check complete', { flagged, scanned });
+        }
+      } catch (error) {
+        logger.error('Startup scrape watch failed', { error });
+      }
+    }, 2 * 60 * 1000); // 2 minutes after boot
+
     // Start listening
     httpServer.listen(config.port, () => {
       const banner = `
