@@ -119,6 +119,36 @@ export const passwordResetLimiter = rateLimit({
 });
 
 /**
+ * Listing browse/search limiter - the marketplace's scraping surface
+ *
+ * Production: 120 requests per minute per user/IP
+ * Development: 1000 per minute
+ *
+ * The global limiter (3000 per 15 min) averages 200/min, which is no obstacle
+ * to a bot walking the catalogue. A person browsing fires roughly one call per
+ * page view plus one per listing opened, so 120/min leaves ordinary use — and
+ * a shared office IP — plenty of headroom while making a bulk dump slow and
+ * conspicuous. Logged as a security event so the pattern is visible.
+ */
+export const listingBrowseLimiter = rateLimit({
+  windowMs: 60 * 1000, // 1 minute
+  max: config.isDevelopment ? 1000 : 120,
+  message: 'Too many listing requests, please slow down.',
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: getClientIdentifier,
+  handler: (req, res) => {
+    logSecurity('Listing browse rate limit exceeded - possible scraping', 'medium', {
+      identifier: getClientIdentifier(req),
+      path: req.path,
+      userAgent: req.get('user-agent'),
+    });
+    rateLimitResponse(req, res);
+  },
+  validate: { xForwardedForHeader: false, keyGeneratorIpFallback: false },
+});
+
+/**
  * FMCSA API limiter - protect external API quota
  * 30 requests per minute per user/IP
  */
@@ -250,6 +280,7 @@ export default {
   auth: authLimiter,
   passwordReset: passwordResetLimiter,
   fmcsa: fmcsaLimiter,
+  listingBrowse: listingBrowseLimiter,
   upload: uploadLimiter,
   listingCreation: listingCreationLimiter,
   offer: offerLimiter,

@@ -79,6 +79,7 @@ class ListingService {
       sortBy = 'newest',
       status,
       sellerId,
+      allowIdentitySubstringSearch = false,
     } = params;
 
     const offset = (page - 1) * limit;
@@ -90,13 +91,25 @@ class ListingService {
     };
 
     // Search
+    //
+    // MC, DOT and legal name are masked in the response, so matching them by
+    // substring hands the masked value back through the result set: probe
+    // "674", then "6748", then "67484" and watch which prefix still returns the
+    // listing, and the number falls out in about thirty requests. Non-admins
+    // get equality on those columns instead — enough to look up a number you
+    // already know, useless for discovering one you don't. Free-text columns
+    // are not sensitive and keep substring matching.
     if (search) {
+      const identityMatch = allowIdentitySubstringSearch
+        ? { [Op.like]: `%${search}%` }
+        : { [Op.eq]: search.trim() };
+
       (where as Record<string, unknown>)[Op.or as unknown as string] = [
-        { mcNumber: { [Op.like]: `%${search}%` } },
-        { dotNumber: { [Op.like]: `%${search}%` } },
+        { mcNumber: identityMatch },
+        { dotNumber: identityMatch },
+        { legalName: identityMatch },
+        { dbaName: identityMatch },
         { title: { [Op.like]: `%${search}%` } },
-        { legalName: { [Op.like]: `%${search}%` } },
-        { dbaName: { [Op.like]: `%${search}%` } },
         { state: { [Op.like]: `%${search}%` } },
         { city: { [Op.like]: `%${search}%` } },
       ];
@@ -198,7 +211,7 @@ class ListingService {
     const cacheKey = `${CacheKeys.LISTINGS}${JSON.stringify({
       status, state, search, minPrice, maxPrice, safetyRating, amazonStatus,
       authorityType, verified, premium, vip, highwaySetup, hasEmail, hasPhone, minYears,
-      sortBy, sellerId, page, limit,
+      sortBy, sellerId, page, limit, allowIdentitySubstringSearch,
     })}`;
 
     // Try to get from cache first (5 minute TTL)

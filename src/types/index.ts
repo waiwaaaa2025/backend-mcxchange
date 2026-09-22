@@ -64,6 +64,10 @@ export interface ListingQueryParams {
   sortBy?: 'price_asc' | 'price_desc' | 'trust_score' | 'newest' | 'oldest' | 'years_active';
   status?: string;
   sellerId?: string;
+  // Whether `search` may match MC/DOT/legal name by substring. Off for
+  // everyone but admins: substring matching on the columns we mask lets a
+  // caller recover a masked number a digit at a time. See listingService.
+  allowIdentitySubstringSearch?: boolean;
 }
 
 // JWT Payload

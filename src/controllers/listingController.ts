@@ -72,11 +72,17 @@ export const searchValidation = [
   query('limit').optional().isInt({ min: 1, max: 100 }).withMessage('Limit must be between 1 and 100'),
 ];
 
+// Largest page a caller may ask for. `?limit=10000` used to be honoured
+// verbatim, so one anonymous request could pull the whole table; searchValidation
+// said 100 but was never wired to a route. Clamp rather than reject, so a client
+// asking for too much gets a page instead of a 400.
+const MAX_PAGE_SIZE = 100;
+
 // Get all listings with filters
 export const getListings = asyncHandler(async (req: AuthRequest, res: Response) => {
   const params: ListingQueryParams = {
-    page: parseIntParam(req.query.page as string) || 1,
-    limit: parseIntParam(req.query.limit as string) || 20,
+    page: Math.max(1, parseIntParam(req.query.page as string) || 1),
+    limit: Math.min(MAX_PAGE_SIZE, Math.max(1, parseIntParam(req.query.limit as string) || 20)),
     search: req.query.search as string,
     minPrice: parseIntParam(req.query.minPrice as string),
     maxPrice: parseIntParam(req.query.maxPrice as string),
@@ -93,6 +99,9 @@ export const getListings = asyncHandler(async (req: AuthRequest, res: Response) 
     minYears: parseIntParam(req.query.minYears as string),
     sortBy: req.query.sortBy as ListingQueryParams['sortBy'],
     status: req.query.status as string,
+    // Only admins may match MC/DOT/legal name by substring — for anyone else
+    // that turns the search box into a way to read back the masked number.
+    allowIdentitySubstringSearch: req.user?.role === UserRole.ADMIN,
   };
 
   const result = await listingService.getListings(params);
