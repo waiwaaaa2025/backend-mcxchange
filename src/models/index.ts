@@ -2837,6 +2837,74 @@ UserAccessLog.init(
   }
 );
 
+// ==================== LISTING ACCESS LOG MODEL ====================
+// Records who reads the marketplace catalogue: browse, search and detail views,
+// signed in or not. Kept apart from user_access_logs on purpose:
+//
+//   - user_access_logs is chargeback evidence. buildEvidencePdf reads a user's
+//     500 OLDEST rows and treats the first one's IP as the purchase IP, so
+//     mixing high-volume browse events into it would push the LOGIN and UNLOCK
+//     rows that prove the sale out of the evidence window.
+//   - userId must be nullable here. Anonymous traffic is the scraping we most
+//     want to see, and user_access_logs requires a user.
+
+export class ListingAccessLog extends Model {
+  declare id: string;
+  declare userId?: string | null;
+  declare event: string; // 'BROWSE' | 'SEARCH' | 'DETAIL'
+  declare listingId?: string | null;
+  declare ipAddress?: string;
+  declare userAgent?: string;
+  declare detail?: string; // search term / result count, truncated
+  declare readonly createdAt: Date;
+}
+
+ListingAccessLog.init(
+  {
+    id: {
+      type: DataTypes.UUID,
+      defaultValue: DataTypes.UUIDV4,
+      primaryKey: true,
+    },
+    userId: {
+      type: DataTypes.UUID,
+      allowNull: true, // anonymous browsing is the point
+    },
+    event: {
+      type: DataTypes.STRING(16),
+      allowNull: false,
+    },
+    listingId: {
+      type: DataTypes.UUID,
+      allowNull: true,
+    },
+    ipAddress: {
+      type: DataTypes.STRING(45),
+      allowNull: true,
+    },
+    userAgent: {
+      type: DataTypes.TEXT,
+      allowNull: true,
+    },
+    detail: {
+      type: DataTypes.STRING(255),
+      allowNull: true,
+    },
+  },
+  {
+    sequelize,
+    tableName: 'listing_access_logs',
+    updatedAt: false,
+    indexes: [
+      // The scrape question is "what did one IP do in the last hour", so the
+      // composite index carries the ordering as well as the filter.
+      { fields: ['ipAddress', 'createdAt'] },
+      { fields: ['userId', 'createdAt'] },
+      { fields: ['createdAt'] },
+    ],
+  }
+);
+
 // ==================== PDF PURCHASE MODEL ====================
 // Tracks one-time PDF / bundle purchases via Stripe Payment Links
 

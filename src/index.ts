@@ -21,6 +21,7 @@ import logger from './utils/logger';
 import { authService } from './services/authService';
 import { expireOverdueBundleAccess } from './services/buyerGuideService';
 import './agents'; // triggers AgentRegistry.register(...) side effects
+import { purgeOldListingAccessLogs } from './utils/listingAccessLog';
 import { startAgentWorker } from './workers/agentJobs.worker';
 import { seedAgentCatalog } from './services/agentRegistration.service';
 import { registerScoutTasks } from './agents/scout/registerTasks';
@@ -229,6 +230,19 @@ const startServer = async () => {
         logger.error('Bundle promo expiry sweep failed', { error });
       }
     }, 6 * 60 * 60 * 1000); // 6 hours
+
+    // Purge catalogue access logs past retention (every 24 hours). These rows
+    // arrive once per page view, so they outgrow everything else we store.
+    setInterval(async () => {
+      try {
+        const removed = await purgeOldListingAccessLogs();
+        if (removed > 0) {
+          logger.info('Purged expired listing access logs', { count: removed });
+        }
+      } catch (error) {
+        logger.error('Listing access log purge failed', { error });
+      }
+    }, 24 * 60 * 60 * 1000); // 24 hours
 
     // Start listening
     httpServer.listen(config.port, () => {

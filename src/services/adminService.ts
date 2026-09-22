@@ -2715,6 +2715,66 @@ class AdminService {
   }
 
   // Get user activity log (unlocked MCs with view counts and credit transactions)
+  /**
+   * Who is reading the catalogue, ranked by volume.
+   *
+   * Groups listing_access_logs by IP over a window so an admin can tell a
+   * scraper from a customer after the fact — previously impossible, since only
+   * LOGIN and UNLOCK were ever recorded. Signed-in and anonymous traffic both
+   * appear; `users` counts the distinct accounts seen behind one IP, which is
+   * how shared-NAT offices separate from bots.
+   */
+  async getScrapeActivity(opts: { hours?: number; limit?: number } = {}) {
+    const hours = Math.min(720, Math.max(1, opts.hours ?? 24));
+    const limit = Math.min(200, Math.max(1, opts.limit ?? 50));
+    const since = new Date(Date.now() - hours * 60 * 60 * 1000);
+
+    const rows = await sequelize.query<{
+      ipAddress: string | null;
+      requests: number;
+      detailViews: number;
+      searches: number;
+      listingsTouched: number;
+      users: number;
+      anonymousRequests: number;
+      userAgents: string | null;
+      firstSeen: Date;
+      lastSeen: Date;
+    }>(
+      `SELECT
+         ipAddress,
+         COUNT(*)                                            AS requests,
+         SUM(event = 'DETAIL')                               AS detailViews,
+         SUM(event = 'SEARCH')                               AS searches,
+         COUNT(DISTINCT listingId)                           AS listingsTouched,
+         COUNT(DISTINCT userId)                              AS users,
+         SUM(userId IS NULL)                                 AS anonymousRequests,
+         SUBSTRING(GROUP_CONCAT(DISTINCT userAgent SEPARATOR ' | '), 1, 500) AS userAgents,
+         MIN(createdAt)                                      AS firstSeen,
+         MAX(createdAt)                                      AS lastSeen
+       FROM listing_access_logs
+       WHERE createdAt >= :since
+       GROUP BY ipAddress
+       ORDER BY requests DESC
+       LIMIT :limit`,
+      { replacements: { since, limit }, type: QueryTypes.SELECT }
+    );
+
+    return {
+      windowHours: hours,
+      since,
+      clients: rows.map((r) => ({
+        ...r,
+        requests: Number(r.requests),
+        detailViews: Number(r.detailViews),
+        searches: Number(r.searches),
+        listingsTouched: Number(r.listingsTouched),
+        users: Number(r.users),
+        anonymousRequests: Number(r.anonymousRequests),
+      })),
+    };
+  }
+
   async getUserActivityLog(userId: string) {
     const user = await User.findByPk(userId);
     if (!user) {

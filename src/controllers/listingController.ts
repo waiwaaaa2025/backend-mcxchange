@@ -8,6 +8,7 @@ import { Subscription, SubscriptionPlan, SubscriptionStatus, UserRole, UnlockedL
 import { buyerPreferencesService } from '../services/buyerPreferencesService';
 import { scoreListing, hasAnyCriteria } from '../services/matchService';
 import { recordAccess } from '../utils/accessLog';
+import { recordListingAccess } from '../utils/listingAccessLog';
 import { AUTHORITY_TYPE_VALUES, requiresDotNumber } from '../utils/authority';
 import { sanitizeListing, redactCarrierIntel } from '../utils/listingSanitize';
 import { Listing } from '../models';
@@ -146,6 +147,16 @@ export const getListings = asyncHandler(async (req: AuthRequest, res: Response) 
     }
   }
 
+  // Record the read so catalogue scraping is visible afterwards, not only when
+  // it trips a rate limit. A search term is worth keeping — repeated identity
+  // lookups from one IP are the signal we care about.
+  recordListingAccess(req, params.search ? 'SEARCH' : 'BROWSE', {
+    userId,
+    detail: params.search
+      ? `q=${params.search} n=${result.pagination?.total ?? listings.length}`
+      : `page=${params.page} limit=${params.limit} n=${result.pagination?.total ?? listings.length}`,
+  });
+
   res.json({
     success: true,
     data: listings,
@@ -172,6 +183,8 @@ export const getListing = asyncHandler(async (req: AuthRequest, res: Response) =
   // reaches carrier intelligence through /listings/:id/carrier-intel instead.
   const entitled = listing.isUnlocked || isOwner || isAdmin;
   const responseData = entitled ? { ...listing } : sanitizeListing(listing);
+
+  recordListingAccess(req, 'DETAIL', { userId, listingId: id });
 
   res.json({
     success: true,

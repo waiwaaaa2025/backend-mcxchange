@@ -73,6 +73,7 @@ import {
   getNotificationSettings,
   updateNotificationSettings,
   getUserActivityLog,
+  getScrapeActivity,
   getActivityLog,
   createAndSendInvoice,
   createInvoiceValidation,
@@ -112,6 +113,9 @@ router.post('/users/with-listing', createUserWithListing);
 router.get('/users/:id', getUserDetails);
 router.put('/users/:id', validate(updateUserValidation), updateUser);
 router.get('/users/:id/activity-log', getUserActivityLog);
+
+// Who is reading the catalogue, ranked by volume (?hours=24&limit=50)
+router.get('/scrape-activity', getScrapeActivity);
 router.put('/users/:id/role', validate(updateUserRoleValidation), updateUserRole);
 router.post('/users/:id/block', validate(blockUserValidation), blockUser);
 router.post('/users/:id/unblock', unblockUser);

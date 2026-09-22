@@ -1395,6 +1395,19 @@ export const updateNotificationSettings = asyncHandler(async (req: AuthRequest, 
 // ============================================
 
 // Get user activity log (unlocked MCs with view counts and credit transactions)
+// Catalogue read activity grouped by client IP — scraping visibility.
+export const getScrapeActivity = asyncHandler(async (req: AuthRequest, res: Response) => {
+  const hours = req.query.hours ? parseInt(req.query.hours as string, 10) : undefined;
+  const limit = req.query.limit ? parseInt(req.query.limit as string, 10) : undefined;
+
+  const data = await adminService.getScrapeActivity({
+    hours: Number.isFinite(hours as number) ? hours : undefined,
+    limit: Number.isFinite(limit as number) ? limit : undefined,
+  });
+
+  res.json({ success: true, data });
+});
+
 export const getUserActivityLog = asyncHandler(async (req: AuthRequest, res: Response) => {
   const { id } = req.params;
 
