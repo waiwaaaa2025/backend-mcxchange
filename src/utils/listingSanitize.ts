@@ -132,6 +132,17 @@ export function scrubIdentity(text: string | null | undefined, identity: Listing
     .trim();
 }
 
+/** Whether a person's display name is, or contains, the carrier's legal name/DBA (either direction). */
+function namesCarrier(name: string | null | undefined, identity: ListingIdentity): boolean {
+  const norm = (v: string | null | undefined) => (v ?? '').toString().toUpperCase().replace(/[^A-Z0-9]/g, '');
+  const n = norm(name);
+  if (n.length < 4) return false;
+  return [identity.legalName, identity.dbaName].some((c) => {
+    const cn = norm(c);
+    return cn.length >= 4 && (n.includes(cn) || cn.includes(n));
+  });
+}
+
 /** A listing title safe to show anyone: scrubbed, with a neutral fallback. */
 export function publicListingTitle(listing: ListingIdentity & { title?: string | null; state?: string | null }): string {
   const scrubbed = scrubIdentity(listing.title, listing);
@@ -176,8 +187,15 @@ export function sanitizeListing(listing: any): any {
   // The seller's companyName is usually the carrier's legal name verbatim, so
   // it reopens the same hole one level down. The seller's display name stays —
   // knowing who you're buying from is the point of the marketplace.
+  //
+  // Some sellers registered with the carrier's legal name as their own name,
+  // so the display name gets the same check before it goes out.
   if (safe.seller) {
-    safe.seller = { ...safe.seller, companyName: null };
+    safe.seller = {
+      ...safe.seller,
+      companyName: null,
+      name: namesCarrier(safe.seller.name, identity) ? 'Verified Seller' : safe.seller.name,
+    };
   }
 
   // Belt and braces: never let an unmasked DOT ride along under another name.
@@ -208,7 +226,10 @@ function redactTree(node: any): any {
 
   const out: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(node)) {
-    out[key] = IDENTITY_KEYS.has(key.toLowerCase()) ? null : redactTree(value);
+    // Normalise before matching: upstream spells the same field docket_number,
+    // docketNumber and DOCKET-NUMBER depending on the source.
+    const normalized = key.toLowerCase().replace(/[^a-z0-9]/g, '');
+    out[key] = IDENTITY_KEYS.has(normalized) ? null : redactTree(value);
   }
   return out;
 }
@@ -229,7 +250,10 @@ export function redactCarrierIntel(
 ): any {
   const redacted = redactTree(bundle);
 
-  const secrets = [identity.mcNumber, identity.dotNumber, identity.legalName]
+  // Numbers are stored as "MC1462480" on some rows and "1462480" on others,
+  // and upstream payloads use either form — match the bare digits as well.
+  const digitsOnly = [identity.mcNumber, identity.dotNumber].map((s) => (s ?? '').toString().replace(/\D/g, ''));
+  const secrets = [identity.mcNumber, identity.dotNumber, identity.legalName, ...digitsOnly]
     .map((s) => (s ?? '').toString().trim())
     // Two characters or fewer would match far too much of the payload.
     .filter((s) => s.length > 2);

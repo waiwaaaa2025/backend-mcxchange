@@ -24,3 +24,20 @@ describe('listing title/description scrub', () => {
     expect(JSON.stringify([safe.title, safe.description])).not.toMatch(/1328075|558123|LDN/i);
   });
 });
+
+describe('identity leaks found by the anonymous probe', () => {
+  it('replaces a seller display name that is the carrier legal name', () => {
+    const safe = sanitizeListing({ ...id, title: 't', seller: { name: 'LDN Express', companyName: 'x' } });
+    expect(safe.seller.name).toBe('Verified Seller');
+    expect(sanitizeListing({ ...id, title: 't', seller: { name: 'Zee' } }).seller.name).toBe('Zee');
+  });
+
+  it('redacts docket_number and bare-digit MCs in carrier intel', () => {
+    const { redactCarrierIntel } = require('../../../utils/listingSanitize');
+    const out = redactCarrierIntel(
+      { documents: { dockets: [{ docket_number: '1462480', prefix: 'MC' }] }, note: 'see 1462480' },
+      { mcNumber: 'MC1462480', dotNumber: '3939259', legalName: 'MORPRO INC' }
+    );
+    expect(JSON.stringify(out)).not.toContain('1462480');
+  });
+});
