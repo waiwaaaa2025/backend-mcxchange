@@ -1,4 +1,5 @@
 import { PlatformSetting } from '../models';
+import { maskNumber, publicListingTitle, scrubIdentity } from '../utils/listingSanitize';
 
 interface TelegramConfig {
   botToken: string;
@@ -154,6 +155,9 @@ class TelegramService {
   async sendListingPromotion(listing: {
     id: string;
     mcNumber: string;
+    dotNumber?: string;
+    legalName?: string;
+    dbaName?: string;
     title: string;
     listingPrice: number;
     state?: string;
@@ -169,8 +173,6 @@ class TelegramService {
     description?: string;
     sellingWithEmail?: boolean;
     sellingWithPhone?: boolean;
-    contactEmail?: string;
-    contactPhone?: string;
     amazonActive?: boolean;
     highwaySetup?: boolean;
     rmisSetup?: boolean;
@@ -185,12 +187,14 @@ class TelegramService {
       message = customMessage + '\n\n';
     }
 
-    // Mask MC number - show only last 3 digits
-    const maskedMC = listing.mcNumber.length > 3
-      ? '***' + listing.mcNumber.slice(-3)
-      : '***';
+    // Mask the MC exactly as the website does. A different mask here (it used
+    // to show the last three digits) combines with the site's first half to
+    // give away the whole number.
+    const maskedMC = maskNumber(listing.mcNumber);
 
-    message += `🚛 <b>${escapeHtml(listing.title)}</b>\n\n`;
+    // The channel is public: never let the title or description carry the
+    // carrier's name, MC or DOT — the same scrub the website applies.
+    message += `🚛 <b>${escapeHtml(publicListingTitle(listing))}</b>\n\n`;
     message += `📋 MC# ${maskedMC}\n`;
     if (listing.state) {
       message += `📍 State: ${escapeHtml(listing.state)}\n`;
@@ -235,15 +239,17 @@ class TelegramService {
 
     // Contact / selling-with details
     if (listing.sellingWithEmail) {
-      message += `✉️ Email: ${listing.contactEmail ? escapeHtml(listing.contactEmail) : 'Included'}\n`;
+      // The seller's direct line is released on unlock, same as on the site.
+      message += `✉️ Email: Included\n`;
     }
     if (listing.sellingWithPhone) {
-      message += `📞 Phone: ${listing.contactPhone ? escapeHtml(listing.contactPhone) : 'Included'}\n`;
+      message += `📞 Phone: Included\n`;
     }
 
     // Full listing description
-    if (listing.description && listing.description.trim()) {
-      message += `\n📝 ${escapeHtml(listing.description.trim())}\n`;
+    const description = scrubIdentity(listing.description, listing);
+    if (description) {
+      message += `\n📝 ${escapeHtml(description)}\n`;
     }
 
     message += `\n🔗 <a href="${listingUrl}">View Listing</a>`;

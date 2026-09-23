@@ -79,12 +79,79 @@ export function sanitizeFmcsaData(raw: unknown): string | null {
   return safe ? JSON.stringify(safe) : null;
 }
 
+interface ListingIdentity {
+  mcNumber?: string | null;
+  dotNumber?: string | null;
+  legalName?: string | null;
+  dbaName?: string | null;
+}
+
+function escapeRegExp(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/**
+ * Remove the carrier's own MC, DOT, legal name and DBA from seller-written text.
+ *
+ * The listing form used to pre-fill the title as "<LEGAL NAME> - DOT #<dot>",
+ * so masking the mcNumber/dotNumber columns left the same values in clear one
+ * field over — on the site, in search (title is LIKE-matched) and in Telegram
+ * posts. Any "MC#"/"DOT #" label left standing is dropped with its number, and
+ * the separators the removal strands are tidied away.
+ */
+export function scrubIdentity(text: string | null | undefined, identity: ListingIdentity): string {
+  if (!text) return text ?? '';
+  let out = text;
+
+  const names = [identity.legalName, identity.dbaName]
+    .map((s) => (s ?? '').toString().trim())
+    .filter((s) => s.length > 2);
+  for (const name of names) {
+    out = out.replace(new RegExp(escapeRegExp(name), 'gi'), '');
+  }
+
+  const numbers = [identity.mcNumber, identity.dotNumber]
+    .map((s) => (s ?? '').toString().replace(/\D/g, ''))
+    .filter((s) => s.length > 2);
+  for (const num of numbers) {
+    // Take an adjacent "MC"/"DOT"/"USDOT" label (with #, :, "number") along with it.
+    const labelled = new RegExp(
+      `\\b(?:US\\s*)?(?:DOT|MC)\\s*(?:#|No\\.?|number|num)?\\s*[:#-]?\\s*${num}\\b`,
+      'gi'
+    );
+    out = out.replace(labelled, '').replace(new RegExp(`\\b${num}\\b`, 'g'), '');
+  }
+
+  return out
+    .replace(/\s*[-–—|,:]\s*(?=[-–—|,:]|$)/g, '') // separators with nothing after them
+    .replace(/^\s*[-–—|,:]\s*/, '')                // ...or before them
+    .replace(/[ \t]{2,}/g, ' ')
+    .trim();
+}
+
+/** A listing title safe to show anyone: scrubbed, with a neutral fallback. */
+export function publicListingTitle(listing: ListingIdentity & { title?: string | null; state?: string | null }): string {
+  const scrubbed = scrubIdentity(listing.title, listing);
+  if (scrubbed.length >= 3) return scrubbed;
+  return listing.state ? `${listing.state} Motor Carrier Authority` : 'Motor Carrier Authority';
+}
+
 /**
  * Strip a listing down to what a viewer who has not unlocked it may see.
  * Accepts a Sequelize instance or a plain object; always returns a plain object.
  */
 export function sanitizeListing(listing: any): any {
   const safe = listing?.toJSON ? listing.toJSON() : { ...listing };
+
+  // Scrub free text while the real values are still here to match against.
+  const identity = {
+    mcNumber: safe.mcNumber,
+    dotNumber: safe._realDotNumber || safe.dotNumber,
+    legalName: safe.legalName,
+    dbaName: safe.dbaName,
+  };
+  safe.title = publicListingTitle({ ...identity, title: safe.title, state: safe.state });
+  if (safe.description) safe.description = scrubIdentity(safe.description, identity);
 
   safe.mcNumber = maskNumber(safe.mcNumber);
   if (safe.dotNumber) safe.dotNumber = maskNumber(safe.dotNumber);

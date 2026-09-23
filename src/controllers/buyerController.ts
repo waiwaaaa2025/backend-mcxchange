@@ -9,6 +9,7 @@ import { config } from '../config';
 import { User, UnlockedListing, Listing, Subscription, SubscriptionPlan, SubscriptionStatus, UserRole, CreditTransaction, CreditTransactionType, ListingStatus, BrokerOutreachRequest, PaymentConsent } from '../models';
 import { CHECKOUT_CONSENT, CHECKOUT_CONSENT_VERSION } from '../constants/legal';
 import logger from '../utils/logger';
+import { sanitizeListing } from '../utils/listingSanitize';
 import { adminNotificationService } from '../services/adminNotificationService';
 import { creditService } from '../services/creditService';
 import { buyerPreferencesService } from '../services/buyerPreferencesService';
@@ -23,12 +24,6 @@ import {
   recordFreePull,
   entitlementForApi,
 } from '../services/entitlementService';
-
-function maskNumber(num: string | null | undefined): string | null | undefined {
-  if (!num) return num;
-  const half = Math.ceil(num.length / 2);
-  return num.substring(0, half) + '•'.repeat(num.length - half);
-}
 
 // Validate a typed payment-terms signature (customer's full legal name).
 // Throws a 400 if it's missing or too short. Returns the trimmed value.
@@ -1371,13 +1366,8 @@ export const getMyMatches = asyncHandler(async (req: AuthRequest, res: Response)
       matches: ranked.map((l) => {
         const raw = l.toJSON() as any;
         const isUnlocked = unlockedIds.has(raw.id);
-        if (!isUnlocked) {
-          raw.mcNumber = maskNumber(raw.mcNumber);
-          if (raw.dotNumber) raw.dotNumber = maskNumber(raw.dotNumber);
-          raw.legalName = null;
-        }
         return {
-          listing: raw,
+          listing: isUnlocked ? raw : sanitizeListing(raw),
           matchScore: l.matchScore,
           matchReasons: l.matchReasons,
           isUnlocked,

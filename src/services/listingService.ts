@@ -19,6 +19,7 @@ import { ListingQueryParams, CreateListingData, PaginationInfo } from '../types'
 import { NotFoundError, ForbiddenError } from '../middleware/errorHandler';
 import { getPaginationInfo } from '../utils/helpers';
 import { normalizeAuthorityType } from '../utils/authority';
+import { publicListingTitle, scrubIdentity } from '../utils/listingSanitize';
 import { cacheService, CacheKeys, CacheTTL } from './cacheService';
 import logger from '../utils/logger';
 
@@ -330,8 +331,10 @@ class ListingService {
       dotNumber: data.dotNumber || '',
       legalName: data.legalName,
       dbaName: data.dbaName,
-      title: data.title,
-      description: data.description,
+      // Stored scrubbed so the carrier's identity can't be read back through
+      // the title/description, or probed via the LIKE search on them.
+      title: publicListingTitle({ ...data, state: data.state?.toUpperCase() }),
+      description: data.description ? scrubIdentity(data.description, data) : data.description,
       askingPrice: data.askingPrice,
       city: data.city,
       state: data.state.toUpperCase(),
@@ -426,8 +429,10 @@ class ListingService {
     }
 
     await listing.update({
-      ...(data.title && { title: data.title }),
-      ...(data.description !== undefined && { description: data.description }),
+      ...(data.title && { title: publicListingTitle({ ...listing.toJSON(), title: data.title }) }),
+      ...(data.description !== undefined && {
+        description: data.description ? scrubIdentity(data.description, listing.toJSON()) : data.description,
+      }),
       ...(data.askingPrice && { askingPrice: data.askingPrice }),
       ...(data.listingPrice !== undefined && { listingPrice: data.listingPrice }),
       ...(data.city && { city: data.city }),

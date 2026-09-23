@@ -181,6 +181,9 @@ export const shareListing = async (req: Request, res: Response) => {
       {
         id: listing.id,
         mcNumber: listing.mcNumber,
+        dotNumber: listing.dotNumber,
+        legalName: listing.legalName,
+        dbaName: listing.dbaName,
         title: listing.title,
         listingPrice: listing.listingPrice || listing.askingPrice,
         state: listing.state,
@@ -196,8 +199,6 @@ export const shareListing = async (req: Request, res: Response) => {
         description: listing.description,
         sellingWithEmail: listing.sellingWithEmail,
         sellingWithPhone: listing.sellingWithPhone,
-        contactEmail: listing.contactEmail,
-        contactPhone: listing.contactPhone,
         amazonActive: listing.amazonStatus === AmazonRelayStatus.ACTIVE,
         highwaySetup: listing.highwaySetup,
         rmisSetup: listing.rmisSetup,
