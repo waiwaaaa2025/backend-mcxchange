@@ -123,6 +123,9 @@ export const shareListing = async (req: Request, res: Response) => {
       {
         id: listing.id,
         mcNumber: listing.mcNumber,
+        dotNumber: listing.dotNumber,
+        legalName: listing.legalName,
+        dbaName: listing.dbaName,
         title: listing.title,
         askingPrice: listing.askingPrice,
         state: listing.state,

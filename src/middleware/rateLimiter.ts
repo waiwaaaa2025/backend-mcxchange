@@ -164,6 +164,26 @@ export const fmcsaLimiter = rateLimit({
 });
 
 /**
+ * Anonymous carrier lookups - 10 per hour per IP
+ *
+ * The home page, product page and pricing estimator let a visitor look up
+ * their own MC before signing up, so /fmcsa/mc stays public. A visitor checks
+ * one or two numbers; a bot sweeping an MC range to match a listing's city
+ * and state needs thousands. Signed-in users skip this and get fmcsaLimiter.
+ */
+export const anonymousLookupLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000, // 1 hour
+  max: 10,
+  message: 'Too many lookups. Sign in to keep searching.',
+  standardHeaders: true,
+  legacyHeaders: false,
+  skip: (req: Request) => !!(req as any).user,
+  keyGenerator: getClientIdentifier,
+  handler: rateLimitResponse,
+  validate: { xForwardedForHeader: false, keyGeneratorIpFallback: false },
+});
+
+/**
  * File upload limiter
  * 10 uploads per hour per user
  */
@@ -280,6 +300,7 @@ export default {
   auth: authLimiter,
   passwordReset: passwordResetLimiter,
   fmcsa: fmcsaLimiter,
+  anonymousLookup: anonymousLookupLimiter,
   listingBrowse: listingBrowseLimiter,
   upload: uploadLimiter,
   listingCreation: listingCreationLimiter,

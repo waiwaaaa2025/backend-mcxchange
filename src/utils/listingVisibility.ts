@@ -1,11 +1,12 @@
 import { Op } from 'sequelize';
+import { MASKED_NUMBER } from './listingSanitize';
 import { Transaction, TransactionStatus, ListingStatus, UserRole } from '../models';
 
-// Mask an MC/DOT number: show first half, replace rest with bullets
+// Same full mask as listingSanitize — the two must agree, or one reveals what
+// the other hides.
 export function maskNumber<T extends string | null | undefined>(num: T): T {
   if (!num) return num;
-  const half = Math.ceil(num.length / 2);
-  return (num.substring(0, half) + '•'.repeat(num.length - half)) as T;
+  return MASKED_NUMBER as T;
 }
 
 export function isSold(status: unknown): boolean {

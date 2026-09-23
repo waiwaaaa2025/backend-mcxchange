@@ -1,4 +1,5 @@
 import { Op, QueryTypes } from 'sequelize';
+import { publicListingTitle, scrubIdentity } from '../utils/listingSanitize';
 import sequelize from '../config/database';
 import { cacheService, CacheKeys, CacheTTL } from './cacheService';
 import { notifyMatchingBuyers } from './matchNotificationService';
@@ -2248,8 +2249,9 @@ class AdminService {
       dotNumber: data.dotNumber || '',
       legalName: data.legalName || '',
       dbaName: data.dbaName || '',
-      title: data.title,
-      description: data.description || '',
+      // Same scrub as seller-created listings: the title is public.
+      title: publicListingTitle({ ...data, state: data.state?.toUpperCase() }),
+      description: scrubIdentity(data.description || '', data),
       askingPrice: data.askingPrice,
       city: data.city || 'Unknown',
       state: data.state || '',

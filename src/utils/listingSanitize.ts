@@ -38,11 +38,13 @@ const FMCSA_SAFETY_FIELDS = [
   'safetyRatingDate',
 ] as const;
 
-// Mask an MC/DOT number: show first half, replace rest with bullets
+// Mask an MC/DOT number completely. Showing the first half left ~1,000
+// candidates, which the listing's city/state narrowed to one with a public
+// FMCSA lookup per candidate. Fixed length, so the digit count doesn't leak.
+export const MASKED_NUMBER = '•••••••';
 export function maskNumber(num: string): string {
   if (!num) return num;
-  const half = Math.ceil(num.length / 2);
-  return num.substring(0, half) + '•'.repeat(num.length - half);
+  return MASKED_NUMBER;
 }
 
 function pickSafetyFields(source: any): Record<string, unknown> | null {

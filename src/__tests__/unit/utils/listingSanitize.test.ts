@@ -24,9 +24,9 @@ const REAL_SNAPSHOT = JSON.stringify({
 });
 
 describe('maskNumber', () => {
-  it('shows the first half and bullets the rest', () => {
-    expect(maskNumber('674843')).toBe('674•••');
-    expect(maskNumber('1866712')).toBe('1866•••');
+  it('hides every digit, and the digit count', () => {
+    expect(maskNumber('674843')).toBe('•••••••');
+    expect(maskNumber('1866712')).toBe('•••••••');
   });
 
   it('passes through empty values untouched', () => {
@@ -96,8 +96,8 @@ describe('sanitizeListing', () => {
 
     expect(serialized).not.toContain('674843');
     expect(serialized).not.toContain('1866712');
-    expect(out.mcNumber).toBe('674•••');
-    expect(out.dotNumber).toBe('1866•••');
+    expect(out.mcNumber).toBe('•••••••');
+    expect(out.dotNumber).toBe('•••••••');
   });
 
   it('withholds the seller contact details', () => {
@@ -156,7 +156,7 @@ describe('sanitizeListing', () => {
     const instance = { toJSON: () => ({ ...listing }) };
     const out = sanitizeListing(instance);
 
-    expect(out.mcNumber).toBe('674•••');
+    expect(out.mcNumber).toBe('•••••••');
   });
 });
 

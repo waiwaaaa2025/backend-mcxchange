@@ -1,4 +1,5 @@
 import { PlatformSetting } from '../models';
+import { maskNumber, publicListingTitle } from '../utils/listingSanitize';
 
 interface FacebookConfig {
   pageAccessToken: string;
@@ -153,6 +154,9 @@ class FacebookService {
     listing: {
       id: string;
       mcNumber: string;
+      dotNumber?: string;
+      legalName?: string;
+      dbaName?: string;
       title: string;
       askingPrice: number;
       state?: string;
@@ -165,10 +169,8 @@ class FacebookService {
     const frontendUrl = process.env.FRONTEND_URL || 'https://www.domilea.com';
     const listingUrl = `${frontendUrl}/mc/${listing.id}`;
 
-    // Mask MC number - show only last 3 digits
-    const maskedMC = listing.mcNumber.length > 3
-      ? '***' + listing.mcNumber.slice(-3)
-      : '***';
+    // Same mask as the site and Telegram; a different one combines with theirs.
+    const maskedMC = maskNumber(listing.mcNumber);
 
     // Build the message
     let message = '';
@@ -177,7 +179,7 @@ class FacebookService {
       message = customMessage + '\n\n';
     }
 
-    message += `🚛 ${listing.title}\n\n`;
+    message += `🚛 ${publicListingTitle(listing)}\n\n`;
     message += `📋 MC# ${maskedMC}\n`;
     message += `💰 Listing Price: $${listing.askingPrice.toLocaleString()}\n`;
 
