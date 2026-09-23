@@ -2905,6 +2905,44 @@ ListingAccessLog.init(
   }
 );
 
+// ==================== BLOCKED IP MODEL ====================
+// Anonymous catalogue access refused from these addresses. Rows are kept after
+// an unblock (status UNBLOCKED) so the auto-blocker respects the admin's call
+// instead of re-blocking the same IP on its next pass.
+
+export class BlockedIp extends Model {
+  declare id: string;
+  declare ipAddress: string;
+  declare status: string; // 'BLOCKED' | 'UNBLOCKED'
+  declare source: string; // 'AUTO' | 'MANUAL'
+  declare reason?: string | null;
+  declare expiresAt?: Date | null; // null = until unblocked
+  declare changedBy?: string | null; // admin user id for manual actions
+  declare hits: number; // refused requests since blocked
+  declare lastHitAt?: Date | null;
+  declare readonly createdAt: Date;
+  declare readonly updatedAt: Date;
+}
+
+BlockedIp.init(
+  {
+    id: { type: DataTypes.UUID, defaultValue: DataTypes.UUIDV4, primaryKey: true },
+    ipAddress: { type: DataTypes.STRING(45), allowNull: false, unique: true },
+    // STRING rather than ENUM: sync() never widens an ENUM on prod.
+    status: { type: DataTypes.STRING(16), allowNull: false, defaultValue: 'BLOCKED' },
+    source: { type: DataTypes.STRING(16), allowNull: false, defaultValue: 'AUTO' },
+    reason: { type: DataTypes.STRING(500), allowNull: true },
+    expiresAt: { type: DataTypes.DATE, allowNull: true },
+    changedBy: { type: DataTypes.UUID, allowNull: true },
+    hits: { type: DataTypes.INTEGER, allowNull: false, defaultValue: 0 },
+    lastHitAt: { type: DataTypes.DATE, allowNull: true },
+  },
+  {
+    sequelize,
+    tableName: 'blocked_ips',
+  }
+);
+
 // ==================== PDF PURCHASE MODEL ====================
 // Tracks one-time PDF / bundle purchases via Stripe Payment Links
 

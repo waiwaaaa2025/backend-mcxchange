@@ -2,11 +2,13 @@ import { Request } from 'express';
 import { UserAccessLog } from '../models';
 import logger from './logger';
 
-// Pull the real client IP — first hop of X-Forwarded-For (Heroku/Vercel proxy) or req.ip.
+// The real client IP. Not the first X-Forwarded-For entry: the client writes
+// that one, so "X-Forwarded-For: 9.9.9.9" logged as 9.9.9.9 — enough to dodge
+// an IP block or get someone else's address blocked. Heroku's router appends
+// the address it actually saw, and with `trust proxy` set to 1 (src/index.ts)
+// Express resolves req.ip to exactly that entry — the same value the rate
+// limiters key on.
 export function clientIp(req: Request): string | undefined {
-  const xff = req.headers['x-forwarded-for'];
-  if (typeof xff === 'string' && xff.length) return xff.split(',')[0].trim();
-  if (Array.isArray(xff) && xff.length) return String(xff[0]).split(',')[0].trim();
   return req.ip;
 }
 

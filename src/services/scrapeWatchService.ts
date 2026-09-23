@@ -2,6 +2,7 @@ import { QueryTypes } from 'sequelize';
 import sequelize from '../config/database';
 import { PlatformSetting } from '../models';
 import { adminNotificationService } from './adminNotificationService';
+import { ipBlockService, AUTO_BLOCK_HOURS } from './ipBlockService';
 import logger from '../utils/logger';
 
 /**
@@ -141,9 +142,16 @@ class ScrapeWatchService {
 
     const clients = await this.getClients(24);
 
-    const flagged = clients
+    const scored = clients
       .map((client) => ({ client, ...assessClient(client) }))
       .filter((c) => c.isLikelyBot);
+
+    // Anything the auto-blocker already shut out was reported when it was
+    // blocked; the daily mail is for what's still getting through.
+    const flagged = [];
+    for (const c of scored) {
+      if (!(await ipBlockService.isBlocked(c.client.ipAddress ?? undefined))) flagged.push(c);
+    }
 
     if (flagged.length === 0) {
       logger.info('Daily scrape watch: nothing flagged', { clientsScanned: clients.length });
@@ -169,6 +177,74 @@ class ScrapeWatchService {
     });
 
     return { scanned: clients.length, flagged: flagged.length };
+  }
+
+  /** IPs any admin account has used in the last 30 days — never auto-blocked. */
+  private async adminIps(): Promise<Set<string>> {
+    const rows = await sequelize.query<{ ipAddress: string }>(
+      `SELECT DISTINCT l.ipAddress FROM listing_access_logs l
+         JOIN users u ON u.id = l.userId
+        WHERE u.role = 'ADMIN' AND l.createdAt >= NOW() - INTERVAL 30 DAY AND l.ipAddress IS NOT NULL
+       UNION
+       SELECT DISTINCT a.ipAddress FROM user_access_logs a
+         JOIN users u ON u.id = a.userId
+        WHERE u.role = 'ADMIN' AND a.createdAt >= NOW() - INTERVAL 30 DAY AND a.ipAddress IS NOT NULL`,
+      { type: QueryTypes.SELECT }
+    );
+    return new Set(rows.map((r) => r.ipAddress));
+  }
+
+  /**
+   * Block every IP the panel scores as a likely bot, for AUTO_BLOCK_HOURS.
+   *
+   * Runs every few minutes, not daily: a scraper that is blocked the next
+   * morning has already taken the catalogue. A block only refuses anonymous
+   * reads (see blockFlaggedIps), so a real person behind the same address can
+   * still sign in and carry on. Mails admins only when something new is blocked.
+   */
+  async runAutoBlock(): Promise<{ scanned: number; blocked: string[] }> {
+    const clients = await this.getClients(24);
+    const scored = clients
+      .map((client) => ({ client, ...assessClient(client) }))
+      .filter((c) => c.isLikelyBot && c.client.ipAddress);
+    if (scored.length === 0) return { scanned: clients.length, blocked: [] };
+
+    const adminIps = await this.adminIps();
+    const blocked: typeof scored = [];
+    for (const c of scored) {
+      const ip = c.client.ipAddress as string;
+      const exempt = await ipBlockService.autoBlockExempt(ip, adminIps);
+      if (exempt) {
+        if (exempt !== 'already blocked') logger.info('Auto-block skipped', { ip, why: exempt });
+        continue;
+      }
+      await ipBlockService.block({
+        ipAddress: ip,
+        source: 'AUTO',
+        hours: AUTO_BLOCK_HOURS,
+        reason: c.reasons.join('; '),
+      });
+      blocked.push(c);
+    }
+
+    if (blocked.length > 0) {
+      logger.warn('Auto-blocked scraping IPs', { ips: blocked.map((b) => b.client.ipAddress) });
+      await adminNotificationService.notifyScrapeActivity({
+        windowHours: 24,
+        totalClients: clients.length,
+        blockedForHours: AUTO_BLOCK_HOURS,
+        clients: blocked.map(({ client, reasons }) => ({
+          ipAddress: client.ipAddress || 'unknown',
+          requests: client.requests,
+          listingsTouched: client.listingsTouched,
+          searches: client.searches,
+          userAgent: client.userAgents || 'no user agent',
+          reasons,
+        })),
+      });
+    }
+
+    return { scanned: clients.length, blocked: blocked.map((b) => b.client.ipAddress as string) };
   }
 }
 

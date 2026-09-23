@@ -9,6 +9,8 @@ import { stripeService } from '../services/stripeService';
 import { pricingConfigService } from '../services/pricingConfigService';
 import { disputeEvidenceService } from '../services/disputeEvidenceService';
 import logger from '../utils/logger';
+import { isIP } from 'net';
+import { ipBlockService } from '../services/ipBlockService';
 
 // Validation rules
 export const rejectListingValidation = [
@@ -1406,6 +1408,35 @@ export const getScrapeActivity = asyncHandler(async (req: AuthRequest, res: Resp
   });
 
   res.json({ success: true, data });
+});
+
+// Blocked IPs — every row, active or lapsed, for the Access Activity panel.
+export const getBlockedIps = asyncHandler(async (_req: AuthRequest, res: Response) => {
+  const rows = await ipBlockService.list();
+  res.json({ success: true, data: rows });
+});
+
+export const blockIp = asyncHandler(async (req: AuthRequest, res: Response) => {
+  const ipAddress = String(req.body?.ipAddress || '').trim();
+  if (!isIP(ipAddress)) throw new BadRequestError('A valid IP address is required');
+  const hours = req.body?.hours ? Number(req.body.hours) : null;
+  if (hours !== null && (!Number.isFinite(hours) || hours <= 0)) throw new BadRequestError('hours must be a positive number');
+
+  const row = await ipBlockService.block({
+    ipAddress,
+    source: 'MANUAL',
+    hours,
+    reason: String(req.body?.reason || 'Blocked by an admin'),
+    changedBy: req.user?.id ?? null,
+  });
+  res.json({ success: true, data: row });
+});
+
+export const unblockIp = asyncHandler(async (req: AuthRequest, res: Response) => {
+  const ipAddress = String(req.params.ip || '').trim();
+  if (!isIP(ipAddress)) throw new BadRequestError('A valid IP address is required');
+  await ipBlockService.unblock(ipAddress, req.user?.id ?? null);
+  res.json({ success: true });
 });
 
 export const getUserActivityLog = asyncHandler(async (req: AuthRequest, res: Response) => {

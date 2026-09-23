@@ -4,6 +4,7 @@ import sequelize from '../config/database';
 import { cacheService, CacheKeys, CacheTTL } from './cacheService';
 import { notifyMatchingBuyers } from './matchNotificationService';
 import {
+  BlockedIp,
   User,
   Listing,
   Transaction,
@@ -2762,10 +2763,24 @@ class AdminService {
       { replacements: { since, limit }, type: QueryTypes.SELECT }
     );
 
+    // Current block state per IP, so the panel can show and undo auto-blocks.
+    const ips = rows.map((r) => r.ipAddress).filter((ip): ip is string => !!ip);
+    const blocks = ips.length
+      ? await BlockedIp.findAll({ where: { ipAddress: { [Op.in]: ips } } })
+      : [];
+    const blockByIp = new Map(blocks.map((b) => [b.ipAddress, b]));
+    const blockState = (ip: string | null) => {
+      const b = ip ? blockByIp.get(ip) : undefined;
+      if (!b) return null;
+      const active = b.status === 'BLOCKED' && (!b.expiresAt || new Date(b.expiresAt) > new Date());
+      return { active, status: b.status, source: b.source, reason: b.reason, expiresAt: b.expiresAt, hits: b.hits, updatedAt: b.updatedAt };
+    };
+
     return {
       windowHours: hours,
       since,
       clients: rows.map((r) => ({
+        block: blockState(r.ipAddress),
         ...r,
         requests: Number(r.requests),
         detailViews: Number(r.detailViews),

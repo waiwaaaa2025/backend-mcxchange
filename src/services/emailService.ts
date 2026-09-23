@@ -1011,7 +1011,7 @@ class EmailService {
       },
 
       'admin-scrape-activity': {
-        subject: 'Possible scraping - {{flaggedCount}} client(s) flagged',
+        subject: 'Possible scraping - {{flaggedCount}} client(s) {{subjectAction}}',
         html: `
           <!DOCTYPE html>
           <html>
@@ -1039,6 +1039,7 @@ class EmailService {
                   </thead>
                   <tbody>{{clientRows}}</tbody>
                 </table>
+                <p><strong>{{actionNote}}</strong></p>
                 <p style="font-size:12px;color:#6b7280">
                   These are heuristics, not proof — a scraper can forge a browser user agent and a
                   shared office connection can look busy. MC numbers stay masked either way.
@@ -1057,6 +1058,8 @@ class EmailService {
 {{flaggedCount}} of {{totalClients}} client(s) reading the marketplace in the last {{windowHours}} hours look automated.
 
 {{clientText}}
+
+{{actionNote}}
 
 These are heuristics, not proof. Review: {{adminUrl}}`,
       },

@@ -224,6 +224,8 @@ class AdminNotificationService {
   async notifyScrapeActivity(data: {
     windowHours: number;
     totalClients: number;
+    // Set when these clients were just auto-blocked rather than only flagged.
+    blockedForHours?: number;
     clients: Array<{
       ipAddress: string;
       requests: number;
@@ -243,7 +245,12 @@ class AdminNotificationService {
         return;
       }
 
+      const blockedDays = data.blockedForHours ? Math.round(data.blockedForHours / 24) : 0;
       await emailService.sendAdminScrapeActivityNotification(emails, {
+        subjectAction: blockedDays ? 'blocked' : 'flagged',
+        actionNote: blockedDays
+          ? `These addresses have been blocked from reading listings without signing in, for ${blockedDays} days. A real person on the same connection can still sign in. Unblock any of them from Access Activity.`
+          : 'Nothing has been blocked — review them in Access Activity.',
         windowHours: data.windowHours,
         flaggedCount: data.clients.length,
         totalClients: data.totalClients,

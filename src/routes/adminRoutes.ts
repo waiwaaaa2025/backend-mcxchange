@@ -74,6 +74,9 @@ import {
   updateNotificationSettings,
   getUserActivityLog,
   getScrapeActivity,
+  getBlockedIps,
+  blockIp,
+  unblockIp,
   getActivityLog,
   createAndSendInvoice,
   createInvoiceValidation,
@@ -116,6 +119,9 @@ router.get('/users/:id/activity-log', getUserActivityLog);
 
 // Who is reading the catalogue, ranked by volume (?hours=24&limit=50)
 router.get('/scrape-activity', getScrapeActivity);
+router.get('/blocked-ips', getBlockedIps);
+router.post('/blocked-ips', blockIp);
+router.delete('/blocked-ips/:ip', unblockIp);
 router.put('/users/:id/role', validate(updateUserRoleValidation), updateUserRole);
 router.post('/users/:id/block', validate(blockUserValidation), blockUser);
 router.post('/users/:id/unblock', unblockUser);

@@ -277,6 +277,16 @@ const startServer = async () => {
       }
     }, 2 * 60 * 1000); // 2 minutes after boot
 
+    // Auto-block: the same scoring as the daily watch, acted on every 10
+    // minutes so a scraper is shut out mid-run rather than the next morning.
+    setInterval(async () => {
+      try {
+        await scrapeWatchService.runAutoBlock();
+      } catch (error) {
+        logger.error('Scrape auto-block failed', { error });
+      }
+    }, 10 * 60 * 1000);
+
     // Start listening
     httpServer.listen(config.port, () => {
       const banner = `

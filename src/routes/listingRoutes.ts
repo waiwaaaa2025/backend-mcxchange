@@ -18,12 +18,13 @@ import {
 import { authenticate, optionalAuth, sellerOnly, buyerOnly, requireEnterpriseSubscription, requireActiveBilling } from '../middleware/auth';
 import { fmcsaLimiter, listingBrowseLimiter } from '../middleware/rateLimiter';
 import validate from '../middleware/validate';
+import { blockFlaggedIps } from '../middleware/ipBlock';
 
 const router = Router();
 
 // Public routes (with optional auth for personalized data)
-router.get('/', optionalAuth, listingBrowseLimiter, getListings);
-router.get('/search', optionalAuth, listingBrowseLimiter, getListings); // Alias
+router.get('/', optionalAuth, blockFlaggedIps, listingBrowseLimiter, getListings);
+router.get('/search', optionalAuth, blockFlaggedIps, listingBrowseLimiter, getListings); // Alias
 
 // Protected routes - must come before :id routes
 router.get('/vip', authenticate, requireEnterpriseSubscription, getListings);
@@ -33,12 +34,12 @@ router.get('/unlocked', authenticate, buyerOnly, getUnlockedListings);
 
 // Single listing — optional auth: anonymous viewers get a masked public preview,
 // authenticated users get personalized/unlocked data (handled in the controller).
-router.get('/:id', optionalAuth, listingBrowseLimiter, getListing);
+router.get('/:id', optionalAuth, blockFlaggedIps, listingBrowseLimiter, getListing);
 
 // Carrier intelligence, resolved from the listing's DOT server-side so the DOT
 // itself never reaches the client. Rate limited: one call fans out to five
 // upstream lookups, which is worth throttling on a route anonymous users reach.
-router.get('/:id/carrier-intel', optionalAuth, fmcsaLimiter, getListingCarrierIntel);
+router.get('/:id/carrier-intel', optionalAuth, blockFlaggedIps, fmcsaLimiter, getListingCarrierIntel);
 
 // Seller routes
 router.post('/', authenticate, sellerOnly, validate(createListingValidation), createListing);

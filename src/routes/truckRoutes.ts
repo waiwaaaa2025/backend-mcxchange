@@ -7,13 +7,14 @@ import {
   uploadTruckPhotos as uploadTruckPhotosHandler,
   deleteTruckPhoto,
 } from '../controllers/truckController';
-import { authenticate } from '../middleware/auth';
+import { authenticate, optionalAuth } from '../middleware/auth';
+import { blockFlaggedIps } from '../middleware/ipBlock';
 import { uploadTruckPhotos } from '../middleware/upload';
 
 const router = Router();
 
 // Public: anyone can view trucks attached to a listing (respects listing visibility elsewhere)
-router.get('/listings/:listingId/trucks', listTrucks);
+router.get('/listings/:listingId/trucks', optionalAuth, blockFlaggedIps, listTrucks);
 
 // Seller-only: manage trucks on their own listings
 router.post('/listings/:listingId/trucks', authenticate, createTruck);

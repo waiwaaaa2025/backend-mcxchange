@@ -9,8 +9,10 @@ import { recordListingAccess, purgeOldListingAccessLogs } from '../../../utils/l
 
 function req(overrides: any = {}): any {
   return {
-    headers: { 'user-agent': 'curl/8.5.0', 'x-forwarded-for': '203.0.113.9, 10.0.0.1' },
-    ip: '10.0.0.1',
+    // The client wrote the first entry; Heroku appended the second, which is
+    // what Express (trust proxy = 1) resolves req.ip to.
+    headers: { 'user-agent': 'curl/8.5.0', 'x-forwarded-for': '9.9.9.9, 203.0.113.9' },
+    ip: '203.0.113.9',
     ...overrides,
   };
 }
@@ -23,7 +25,7 @@ beforeEach(() => {
 });
 
 describe('recordListingAccess', () => {
-  it('records the client IP from the proxy header, not the proxy hop', () => {
+  it('records the address the proxy saw, not the one the client claims', () => {
     recordListingAccess(req(), 'BROWSE');
 
     expect(mockCreate).toHaveBeenCalledWith(
