@@ -122,6 +122,9 @@ export function scrubIdentity(text: string | null | undefined, identity: Listing
     out = out.replace(labelled, '').replace(new RegExp(`\\b${num}\\b`, 'g'), '');
   }
 
+  // Nothing identifying found: hand the seller's text back exactly as written.
+  if (out === text) return text;
+
   return out
     .replace(/\s*[-–—|,:]\s*(?=[-–—|,:]|$)/g, '') // separators with nothing after them
     .replace(/^\s*[-–—|,:]\s*/, '')                // ...or before them
