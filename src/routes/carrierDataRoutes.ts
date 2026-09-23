@@ -1,13 +1,13 @@
 import { Router } from 'express';
 import { getCarrierReport, refreshCarrierReport } from '../controllers/carrierDataController';
-import { authenticate } from '../middleware/auth';
-import { fmcsaLimiter } from '../middleware/rateLimiter';
+import { authenticate, optionalAuth } from '../middleware/auth';
+import { anonymousCarrierDataLimiter, fmcsaLimiter } from '../middleware/rateLimiter';
 
 const router = Router();
 
-// Signed-in only (cached 24hr). Every caller is a logged-in page, and left open
-// it answered "which carrier is this DOT?" for anyone sweeping numbers.
-router.get('/report/:dotNumber', authenticate, fmcsaLimiter, getCarrierReport);
+// Public (cached 24hr) — the Carrier Pulse preview loads it for logged-out
+// visitors, who are capped per IP per hour.
+router.get('/report/:dotNumber', optionalAuth, anonymousCarrierDataLimiter, fmcsaLimiter, getCarrierReport);
 
 // Authenticated — force refresh cache
 router.post('/report/:dotNumber/refresh', authenticate, refreshCarrierReport);

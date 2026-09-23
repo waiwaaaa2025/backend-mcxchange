@@ -184,6 +184,25 @@ export const anonymousLookupLimiter = rateLimit({
 });
 
 /**
+ * Anonymous carrier-detail lookups by DOT - 60 per hour per IP
+ *
+ * The public Carrier Pulse preview (home page → /carrier-pulse-preview) makes
+ * five or six of these per carrier, so this allows about ten previews an hour
+ * before asking the visitor to sign in. Signed-in users skip it.
+ */
+export const anonymousCarrierDataLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000, // 1 hour
+  max: 60,
+  message: 'Too many lookups. Sign in to keep searching.',
+  standardHeaders: true,
+  legacyHeaders: false,
+  skip: (req: Request) => !!(req as any).user,
+  keyGenerator: getClientIdentifier,
+  handler: rateLimitResponse,
+  validate: { xForwardedForHeader: false, keyGeneratorIpFallback: false },
+});
+
+/**
  * File upload limiter
  * 10 uploads per hour per user
  */
@@ -301,6 +320,7 @@ export default {
   passwordReset: passwordResetLimiter,
   fmcsa: fmcsaLimiter,
   anonymousLookup: anonymousLookupLimiter,
+  anonymousCarrierData: anonymousCarrierDataLimiter,
   listingBrowse: listingBrowseLimiter,
   upload: uploadLimiter,
   listingCreation: listingCreationLimiter,

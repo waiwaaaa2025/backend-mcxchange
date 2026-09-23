@@ -9,8 +9,8 @@ import {
   getSMSData,
   getCargoCarried,
 } from '../controllers/fmcsaController';
-import { authenticate, optionalAuth } from '../middleware/auth';
-import { anonymousLookupLimiter, fmcsaLimiter } from '../middleware/rateLimiter';
+import { optionalAuth } from '../middleware/auth';
+import { anonymousCarrierDataLimiter, anonymousLookupLimiter, fmcsaLimiter } from '../middleware/rateLimiter';
 
 const router = Router();
 
@@ -21,12 +21,15 @@ const router = Router();
 router.get('/mc/:mcNumber', optionalAuth, anonymousLookupLimiter, fmcsaLimiter, lookupByMC);
 router.get('/verify/:mcNumber', optionalAuth, anonymousLookupLimiter, fmcsaLimiter, verifyMC);
 
-// Everything else is only called from signed-in pages.
-router.get('/dot/:dotNumber', authenticate, fmcsaLimiter, lookupByDOT);
-router.get('/snapshot/:identifier', authenticate, fmcsaLimiter, getCarrierSnapshot);
-router.get('/authority/:dotNumber', authenticate, fmcsaLimiter, getAuthorityHistory);
-router.get('/insurance/:dotNumber', authenticate, fmcsaLimiter, getInsuranceHistory);
-router.get('/sms/:dotNumber', authenticate, fmcsaLimiter, getSMSData);
-router.get('/cargo-carried/:dotNumber', authenticate, fmcsaLimiter, getCargoCarried);
+// Carrier detail by DOT. Public too: the Carrier Pulse preview renders these
+// for logged-out visitors. With MC/DOT fully masked on listings there is no
+// partial number left to sweep, so a per-IP hourly cap is enough here.
+const carrierData = [optionalAuth, anonymousCarrierDataLimiter, fmcsaLimiter];
+router.get('/dot/:dotNumber', ...carrierData, lookupByDOT);
+router.get('/snapshot/:identifier', ...carrierData, getCarrierSnapshot);
+router.get('/authority/:dotNumber', ...carrierData, getAuthorityHistory);
+router.get('/insurance/:dotNumber', ...carrierData, getInsuranceHistory);
+router.get('/sms/:dotNumber', ...carrierData, getSMSData);
+router.get('/cargo-carried/:dotNumber', ...carrierData, getCargoCarried);
 
 export default router;
