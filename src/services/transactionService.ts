@@ -1,3 +1,4 @@
+import { sellerNetPayout } from '../utils/helpers';
 import { Op } from 'sequelize';
 import sequelize from '../config/database';
 import {
@@ -753,7 +754,7 @@ class TransactionService {
           sellerId: listing.sellerId,
           adminId,
           agreedPrice,
-          sellerPayout: Number(listing.askingPrice || agreedPrice),
+          sellerPayout: sellerNetPayout(agreedPrice, platformFee, null, listing.askingPrice),
           depositAmount: calculatedDeposit,
           platformFee,
           finalPaymentAmount: agreedPrice - calculatedDeposit,

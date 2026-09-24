@@ -4,6 +4,7 @@ import { adminService } from '../services/adminService';
 import { asyncHandler, NotFoundError, BadRequestError } from '../middleware/errorHandler';
 import { AuthRequest } from '../types';
 import { PremiumRequestStatus, Transaction, User, Listing, TransactionTimeline, Notification, TransactionStatus, NotificationType, BrokerOutreachStatus, Payment, PaymentType, PaymentStatus } from '../models';
+import { sellerNetPayout } from '../utils/helpers';
 import { Op } from 'sequelize';
 import { parseIntParam, parseBooleanParam } from '../utils/helpers';
 import { stripeService } from '../services/stripeService';
@@ -1684,22 +1685,6 @@ export const releasePayoutToSeller = asyncHandler(async (req: AuthRequest, res: 
     throw new BadRequestError('Payout has already been released for this transaction');
   }
 
-  // A final payment made as a Stripe Connect split paid the seller at charge
-  // time. Transactions paid before that was recorded on payoutStatus are
-  // caught by asking Stripe whether the payment carried a transfer.
-  const finalPayment = await Payment.findOne({
-    where: { transactionId: transaction.id, type: PaymentType.FINAL_PAYMENT, status: PaymentStatus.COMPLETED },
-    order: [['createdAt', 'DESC']],
-  });
-  if (finalPayment?.stripePaymentId) {
-    const stripe = stripeService.getStripe();
-    const pi = stripe ? await stripe.paymentIntents.retrieve(finalPayment.stripePaymentId).catch(() => null) : null;
-    if (pi?.transfer_data?.destination) {
-      await transaction.update({ payoutStatus: 'PAID_VIA_CONNECT' });
-      throw new BadRequestError('The seller was already paid automatically by Stripe with the final payment');
-    }
-  }
-
   const seller = (transaction as any).seller as User;
   if (!seller) {
     throw new NotFoundError('Seller not found');
@@ -1715,16 +1700,34 @@ export const releasePayoutToSeller = asyncHandler(async (req: AuthRequest, res: 
     throw new BadRequestError('Seller Stripe Connect account is not fully onboarded');
   }
 
-  // Calculate payout amount — use sellerPayout if set, otherwise use agreedPrice minus platformFee
+  // Only pay what's still owed. A Connect-split final payment sent part (or
+  // all) of the payout at charge time — recorded on sellerPaidAtCharge; for
+  // payments made before that column existed, ask Stripe what was transferred.
   const listing = (transaction as any).listing;
-  const payoutAmount = transaction.sellerPayout
-    || (listing?.askingPrice || transaction.agreedPrice);
-
-  if (!payoutAmount || payoutAmount <= 0) {
-    throw new BadRequestError('Invalid payout amount');
+  const payoutTotal =
+    Number(transaction.sellerPayout) ||
+    sellerNetPayout(Number(transaction.agreedPrice), Number(transaction.platformFee || 0), null, listing?.askingPrice);
+  let paidAtCharge = transaction.sellerPaidAtCharge != null ? Number(transaction.sellerPaidAtCharge) : 0;
+  if (transaction.sellerPaidAtCharge == null) {
+    const finalPayment = await Payment.findOne({
+      where: { transactionId: transaction.id, type: PaymentType.FINAL_PAYMENT, status: PaymentStatus.COMPLETED },
+      order: [['createdAt', 'DESC']],
+    });
+    if (finalPayment?.stripePaymentId) {
+      const stripe = stripeService.getStripe();
+      const pi = stripe ? await stripe.paymentIntents.retrieve(finalPayment.stripePaymentId).catch(() => null) : null;
+      if (pi?.transfer_data?.destination) {
+        paidAtCharge = (pi.amount - (pi.application_fee_amount || 0)) / 100;
+      }
+    }
+  }
+  const payoutAmount = Math.round((payoutTotal - paidAtCharge) * 100) / 100;
+  if (payoutAmount <= 0) {
+    await transaction.update({ payoutStatus: 'PAID_VIA_CONNECT' });
+    throw new BadRequestError('The seller was already paid in full by Stripe with the final payment');
   }
 
-  const amountInCents = Math.round(Number(payoutAmount) * 100);
+  const amountInCents = Math.round(payoutAmount * 100);
   const mcNumber = listing?.mcNumber || 'N/A';
   const isInstant = payoutMethod === 'instant';
 

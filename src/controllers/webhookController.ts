@@ -665,38 +665,48 @@ const PAID_VIA_CONNECT = 'PAID_VIA_CONNECT';
 
 /**
  * Seller payout / platform fee (dollars) from final_payment session metadata.
- * Both checkout paths send cents under `sellerPayout` / `applicationFee` and a
- * `payoutMode`. Sessions created before payoutMode existed: the Connect split
- * sent cents + applicationFee; the platform-collected fallback sent DOLLARS
- * under `sellerPayout` / `platformFee`.
+ *
+ * Current sessions send cents: `sellerPayoutTotal` / `platformFeeTotal` (what
+ * the seller is owed overall and Domilea's total take) plus, for a Connect
+ * split, `sellerPayout` = the part Stripe sends the seller from this charge.
+ * Older sessions: the Connect split sent only `sellerPayout` / `applicationFee`
+ * (cents); the platform-collected fallback sent DOLLARS under `sellerPayout`
+ * / `platformFee` with no payoutMode.
  */
 export function parseFinalPaymentSplit(metadata: Stripe.Metadata | null | undefined): {
   sellerPayout: number;
   platformFee: number;
   paidViaConnect: boolean;
+  paidAtCharge: number;
 } {
   const num = (v: string | undefined) => {
     const n = Number(v);
     return isFinite(n) ? n : 0;
   };
+  const cents = (v: string | undefined) => num(v) / 100;
   const mode = metadata?.payoutMode;
   if (mode === 'connect_split' || mode === 'manual') {
+    const connect = mode === 'connect_split';
+    const hasTotals = metadata?.sellerPayoutTotal !== undefined;
     return {
-      sellerPayout: num(metadata?.sellerPayout) / 100,
-      platformFee: num(metadata?.applicationFee) / 100,
-      paidViaConnect: mode === 'connect_split',
+      sellerPayout: cents(hasTotals ? metadata!.sellerPayoutTotal : metadata?.sellerPayout),
+      platformFee: cents(metadata?.platformFeeTotal ?? metadata?.applicationFee),
+      paidViaConnect: connect,
+      paidAtCharge: connect ? cents(metadata?.sellerPayout) : 0,
     };
   }
   if (metadata?.applicationFee !== undefined) {
-    // Legacy Connect split
-    return {
-      sellerPayout: num(metadata.sellerPayout) / 100,
-      platformFee: num(metadata.applicationFee) / 100,
-      paidViaConnect: true,
-    };
+    // Legacy Connect split: the whole payout went to the seller at charge time.
+    const payout = cents(metadata.sellerPayout);
+    return { sellerPayout: payout, platformFee: cents(metadata.applicationFee), paidViaConnect: true, paidAtCharge: payout };
   }
   // Legacy platform-collected fallback (dollars)
-  return { sellerPayout: num(metadata?.sellerPayout), platformFee: num(metadata?.platformFee), paidViaConnect: false };
+  return {
+    sellerPayout: num(metadata?.sellerPayout),
+    platformFee: num(metadata?.platformFee),
+    paidViaConnect: false,
+    paidAtCharge: 0,
+  };
 }
 
 async function handleCheckoutSessionCompleted(session: Stripe.Checkout.Session): Promise<void> {
@@ -902,9 +912,12 @@ async function handleCheckoutSessionCompleted(session: Stripe.Checkout.Session):
     const transaction = await Transaction.findByPk(transactionId);
     if (transaction && transaction.status === TransactionStatus.PAYMENT_PENDING) {
       const amountPaid = session.amount_total ? session.amount_total / 100 : 0;
-      const { sellerPayout, platformFee, paidViaConnect } = parseFinalPaymentSplit(metadata);
+      const { sellerPayout, platformFee, paidViaConnect, paidAtCharge } = parseFinalPaymentSplit(metadata);
       const sellerPayoutCents = Math.round(sellerPayout * 100);
       const applicationFeeCents = Math.round(platformFee * 100);
+      // Fully paid by Stripe, or does an admin still release a remainder?
+      const remainingToSeller = Math.round((sellerPayout - paidAtCharge) * 100) / 100;
+      const fullyPaidViaConnect = paidViaConnect && remainingToSeller <= 0;
 
       await transaction.update({
         status: TransactionStatus.PAYMENT_RECEIVED,
@@ -913,9 +926,10 @@ async function handleCheckoutSessionCompleted(session: Stripe.Checkout.Session):
         finalPaymentMethod: 'STRIPE' as any,
         sellerPayout,
         platformFee,
-        // A Connect split already paid the seller; flag it so the admin
-        // "release payout" can't transfer the same money a second time.
-        ...(paidViaConnect && { payoutStatus: PAID_VIA_CONNECT, payoutReleasedAt: new Date() }),
+        sellerPaidAtCharge: paidAtCharge,
+        // A Connect split that covered the whole payout already paid the
+        // seller; flag it so "release payout" can't pay the same money again.
+        ...(fullyPaidViaConnect && { payoutStatus: PAID_VIA_CONNECT, payoutReleasedAt: new Date() }),
       });
 
       // Create Payment record
@@ -948,9 +962,11 @@ async function handleCheckoutSessionCompleted(session: Stripe.Checkout.Session):
       await notificationService.notifyTransactionStatus(
         sellerId,
         'Final Payment Received',
-        paidViaConnect
-          ? `The buyer has completed the final payment of $${amountPaid.toLocaleString()} for MC #${mcNumber || 'N/A'}. Funds will be deposited to your connected account.`
-          : `The buyer has completed the final payment of $${amountPaid.toLocaleString()} for MC #${mcNumber || 'N/A'}. Domilea will release your payout once the transfer is complete.`,
+        fullyPaidViaConnect
+          ? `The buyer has completed the final payment of $${amountPaid.toLocaleString()} for MC #${mcNumber || 'N/A'}. Your payout of $${sellerPayout.toLocaleString()} will be deposited to your connected account.`
+          : paidViaConnect
+            ? `The buyer has completed the final payment of $${amountPaid.toLocaleString()} for MC #${mcNumber || 'N/A'}. $${paidAtCharge.toLocaleString()} will be deposited to your connected account now; the remaining $${remainingToSeller.toLocaleString()} is released by Domilea when the transfer is complete.`
+            : `The buyer has completed the final payment of $${amountPaid.toLocaleString()} for MC #${mcNumber || 'N/A'}. Domilea will release your $${sellerPayout.toLocaleString()} payout once the transfer is complete.`,
         transactionId
       );
 

@@ -4,7 +4,8 @@ import { transactionService } from '../services/transactionService';
 import stripeService from '../services/stripeService';
 import { asyncHandler, NotFoundError, ForbiddenError, BadRequestError } from '../middleware/errorHandler';
 import { AuthRequest } from '../types';
-import { PaymentMethod, TransactionStatus, Transaction, Listing, User } from '../models';
+import { PaymentMethod, TransactionStatus, Transaction, Listing, User, Offer } from '../models';
+import { calculatePlatformFee, sellerNetPayout } from '../utils/helpers';
 import { config } from '../config';
 
 // Validation rules
@@ -454,14 +455,19 @@ export const createFinalPaymentCheckout = asyncHandler(async (req: AuthRequest, 
     await buyer.update({ stripeCustomerId });
   }
 
-  // Calculate amounts
+  // Calculate amounts. The seller is owed their asking price (or a negotiated
+  // net) capped at agreed − platform fee; Domilea keeps the rest.
   const listing = (transaction as any).listing;
-  const askingPrice = listing?.askingPrice || 0;
-  const agreedPrice = transaction.agreedPrice;
-  const depositAmount = transaction.depositAmount || 0;
+  const agreedPrice = Number(transaction.agreedPrice);
+  const depositAmount = Number(transaction.depositAmount || 0);
   const finalPaymentAmount = agreedPrice - depositAmount;
-  const sellerPayout = askingPrice; // Seller gets their full asking price
-  const platformCommission = agreedPrice - askingPrice; // Total platform commission
+  const offer = transaction.offerId ? await Offer.findByPk(transaction.offerId, { attributes: ['sellerAmount'] }) : null;
+  const feeBasis = transaction.platformFee != null ? Number(transaction.platformFee) : calculatePlatformFee(agreedPrice);
+  const sellerPayout = sellerNetPayout(agreedPrice, feeBasis, offer?.sellerAmount, listing?.askingPrice);
+  const platformCommission = Math.round((agreedPrice - sellerPayout) * 100) / 100; // Domilea's total take
+  // The deposit was collected by Domilea, so this charge may not cover the
+  // whole seller payout; any rest is released by an admin at closing.
+  const sellerFromThisCharge = Math.min(sellerPayout, Math.max(finalPaymentAmount, 0));
 
   if (finalPaymentAmount <= 0) {
     throw new BadRequestError('Invalid final payment amount');
@@ -484,7 +490,11 @@ export const createFinalPaymentCheckout = asyncHandler(async (req: AuthRequest, 
     result = await stripeService.createFinalPaymentCheckout({
       customerId: stripeCustomerId,
       amount: Math.round(finalPaymentAmount * 100),
-      sellerPayout: Math.round(sellerPayout * 100),
+      sellerPayout: Math.round(sellerFromThisCharge * 100),
+      extraMetadata: {
+        sellerPayoutTotal: String(Math.round(sellerPayout * 100)),
+        platformFeeTotal: String(Math.round(platformCommission * 100)),
+      },
       sellerConnectedAccountId: seller.stripeAccountId,
       buyerId: req.user.id,
       sellerId: transaction.sellerId,
@@ -514,6 +524,8 @@ export const createFinalPaymentCheckout = asyncHandler(async (req: AuthRequest, 
         sellerId: transaction.sellerId,
         sellerPayout: String(Math.round(sellerPayout * 100)),
         applicationFee: String(Math.round(platformCommission * 100)),
+        sellerPayoutTotal: String(Math.round(sellerPayout * 100)),
+        platformFeeTotal: String(Math.round(platformCommission * 100)),
         payoutMode: 'manual',
       },
     });

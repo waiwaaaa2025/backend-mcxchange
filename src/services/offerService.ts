@@ -13,7 +13,7 @@ import {
 } from '../models';
 import { NotFoundError, ForbiddenError, ConflictError } from '../middleware/errorHandler';
 import { CreateOfferData } from '../types';
-import { calculateDeposit, calculatePlatformFee } from '../utils/helpers';
+import { calculateDeposit, calculatePlatformFee, sellerNetPayout } from '../utils/helpers';
 import { addDays } from 'date-fns';
 import { adminNotificationService } from './adminNotificationService';
 import { emailService } from './emailService';
@@ -232,9 +232,9 @@ class OfferService {
 
     // Calculate amounts — buyer pays their offer amount, seller gets sellerAmount
     const buyerPrice = Number(offer.counterAmount || offer.amount);
-    const sellerPrice = Number(offer.sellerAmount || buyerPrice);
     const depositAmount = calculateDeposit(buyerPrice);
     const platformFee = calculatePlatformFee(buyerPrice);
+    const sellerPrice = sellerNetPayout(buyerPrice, platformFee, offer.sellerAmount, (offer as any).listing?.askingPrice ?? (await Listing.findByPk(offer.listingId, { attributes: ['askingPrice'] }))?.askingPrice);
 
     const t = await sequelize.transaction();
 

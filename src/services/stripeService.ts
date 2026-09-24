@@ -1930,7 +1930,7 @@ class StripeService {
   async createFinalPaymentCheckout(params: {
     customerId: string;
     amount: number; // Total charge in cents (finalPaymentAmount = agreedPrice - deposit)
-    sellerPayout: number; // Amount to seller in cents (askingPrice)
+    sellerPayout: number; // Cents sent to the seller from this charge (≤ amount)
     sellerConnectedAccountId: string; // Seller's Stripe Connect account ID
     buyerId: string;
     sellerId: string;
@@ -1938,6 +1938,7 @@ class StripeService {
     mcNumber: string;
     successUrl: string;
     cancelUrl: string;
+    extraMetadata?: Record<string, string>;
   }): Promise<CheckoutSessionResult> {
     if (!stripe) {
       return { success: false, error: 'Payment service not available' };
@@ -1986,8 +1987,9 @@ class StripeService {
           mcNumber: params.mcNumber,
           sellerPayout: String(params.sellerPayout),
           applicationFee: String(applicationFee),
-          // Stripe pays the seller at charge time — no admin release needed.
+          // Stripe pays the seller at charge time.
           payoutMode: 'connect_split',
+          ...params.extraMetadata,
         },
       });
 

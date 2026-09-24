@@ -67,6 +67,26 @@ export function calculatePlatformFee(salePrice: number): number {
   return salePrice * (PLATFORM_FEES.TRANSACTION_FEE_PERCENTAGE / 100);
 }
 
+/**
+ * What the seller receives for an MC sale: their asking price, but never more
+ * than the agreed price minus the platform fee. A buyer paying above asking
+ * leaves the spread with Domilea; a deal agreed below asking pays the seller
+ * agreed − fee. An admin-negotiated seller net (offer.sellerAmount) replaces
+ * the asking price, under the same cap.
+ */
+export function sellerNetPayout(
+  agreedPrice: number,
+  platformFee: number,
+  negotiatedSellerAmount?: number | null,
+  askingPrice?: number | null
+): number {
+  const cap = Math.max(Number(agreedPrice) - Number(platformFee || 0), 0);
+  const negotiated = Number(negotiatedSellerAmount);
+  const asking = Number(askingPrice);
+  const target = negotiated > 0 ? negotiated : asking > 0 ? asking : cap;
+  return Math.round(Math.min(target, cap) * 100) / 100;
+}
+
 // Format currency
 export function formatCurrency(amount: number): string {
   return new Intl.NumberFormat('en-US', {

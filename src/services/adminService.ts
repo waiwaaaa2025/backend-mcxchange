@@ -39,7 +39,7 @@ import {
   BrokerOutreachStatus,
 } from '../models';
 import { NotFoundError, BadRequestError, ForbiddenError } from '../middleware/errorHandler';
-import { getPaginationInfo, calculateDeposit, calculatePlatformFee } from '../utils/helpers';
+import { getPaginationInfo, calculateDeposit, calculatePlatformFee, sellerNetPayout } from '../utils/helpers';
 import { normalizeAuthorityType } from '../utils/authority';
 import { emailService } from './emailService';
 import { adminNotificationService } from './adminNotificationService';
@@ -1543,7 +1543,7 @@ class AdminService {
         );
 
         // Create the transaction - this starts the round table!
-        const sellerPayout = Number(offer.sellerAmount || listing?.askingPrice || agreedPrice);
+        const sellerPayout = sellerNetPayout(agreedPrice, platformFee, offer.sellerAmount, listing?.askingPrice);
         const transaction = await Transaction.create(
           {
             offerId,
@@ -1649,7 +1649,7 @@ class AdminService {
         );
 
         // Create the transaction
-        const sellerPayout = Number(offer.sellerAmount || listing?.askingPrice || agreedPrice);
+        const sellerPayout = sellerNetPayout(agreedPrice, platformFee, offer.sellerAmount, listing?.askingPrice);
         const transaction = await Transaction.create(
           {
             offerId,
@@ -1899,9 +1899,9 @@ class AdminService {
 
     // Calculate amounts — buyer pays counter or original; seller gets sellerAmount if set
     const buyerPrice = Number(offer.counterAmount || offer.amount);
-    const sellerPrice = Number(offer.sellerAmount || buyerPrice);
     const depositAmount = calculateDeposit(buyerPrice);
     const platformFee = calculatePlatformFee(buyerPrice);
+    const sellerPrice = sellerNetPayout(buyerPrice, platformFee, offer.sellerAmount, listing?.askingPrice);
 
     const t = await sequelize.transaction();
 

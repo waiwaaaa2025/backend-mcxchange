@@ -1202,6 +1202,8 @@ export class Transaction extends Model {
   declare status: TransactionStatus;
   declare agreedPrice: number;
   declare sellerPayout?: number;
+  // Part of sellerPayout Stripe sent the seller at final-payment time (Connect split).
+  declare sellerPaidAtCharge?: number | null;
   declare depositAmount: number;
   declare platformFee?: number;
   declare finalPaymentAmount?: number;
@@ -1277,6 +1279,14 @@ Transaction.init(
     sellerPayout: {
       type: DataTypes.DECIMAL(12, 2),
       allowNull: true,
+    },
+    sellerPaidAtCharge: {
+      type: DataTypes.DECIMAL(12, 2),
+      allowNull: true,
+      get() {
+        const v = this.getDataValue('sellerPaidAtCharge');
+        return v == null ? null : Number(v);
+      },
     },
     depositAmount: {
       type: DataTypes.DECIMAL(12, 2),

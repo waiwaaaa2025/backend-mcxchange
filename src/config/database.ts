@@ -145,6 +145,7 @@ export const connectDatabase = async (): Promise<void> => {
     await addColumnIfMissing('transactions', 'payoutStatus', 'VARCHAR(20) NULL');
     await addColumnIfMissing('transactions', 'payoutReleasedAt', 'DATETIME NULL');
     await addColumnIfMissing('transactions', 'payoutTransferId', 'VARCHAR(255) NULL');
+    await addColumnIfMissing('transactions', 'sellerPaidAtCharge', 'DECIMAL(12,2) NULL');
 
     // Convert document type from ENUM to VARCHAR to avoid enum sync issues
     try {
