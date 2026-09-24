@@ -3,7 +3,8 @@ import { asyncHandler } from '../middleware/errorHandler';
 import { AuthRequest } from '../types';
 import { truckService } from '../services/truckService';
 import { config } from '../config';
-import { TruckCondition } from '../models';
+import { TruckCondition, Listing, UnlockedListing, UserRole } from '../models';
+import { stripVins } from '../utils/listingSanitize';
 
 const fileToPublicUrl = (file: Express.Multer.File): string => {
   const s3Url = (file as any).s3Url as string | undefined;
@@ -15,7 +16,17 @@ const fileToPublicUrl = (file: Express.Multer.File): string => {
 export const listTrucks = asyncHandler(async (req: AuthRequest, res: Response) => {
   const listingId = req.params.listingId;
   const trucks = await truckService.listByListing(listingId);
-  res.json({ success: true, data: trucks });
+
+  // VINs identify the carrier behind a masked listing — owner, admin and
+  // buyers who unlocked it only.
+  let entitled = req.user?.role === UserRole.ADMIN;
+  if (!entitled && req.user) {
+    const listing = await Listing.findByPk(listingId, { attributes: ['id', 'sellerId'] });
+    entitled = listing?.sellerId === req.user.id
+      || !!(await UnlockedListing.findOne({ where: { userId: req.user.id, listingId } }));
+  }
+
+  res.json({ success: true, data: entitled ? trucks : stripVins(trucks) });
 });
 
 export const createTruck = asyncHandler(async (req: AuthRequest, res: Response) => {

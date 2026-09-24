@@ -200,6 +200,10 @@ export function sanitizeListing(listing: any): any {
     };
   }
 
+  // A VIN decodes straight back to the registered carrier, so seller-entered
+  // truck VINs stay hidden until unlock like the MC/DOT they would reveal.
+  if (Array.isArray(safe.trucks)) safe.trucks = stripVins(safe.trucks);
+
   // Belt and braces: never let an unmasked DOT ride along under another name.
   delete safe._realDotNumber;
 
@@ -220,7 +224,23 @@ const IDENTITY_KEYS = new Set([
   'address', 'physicaladdress', 'mailingaddress', 'addressline1', 'addressline2',
   'zip', 'zipcode', 'postalcode',
   'ein', 'taxid',
+  'vin', 'vinnumber',
 ]);
+
+const VIN_KEYS = new Set(['vin', 'vinnumber']);
+
+// Blank every VIN in a payload of unknown shape (listing trucks, carrier
+// report fleet/inspections/shared equipment) while leaving the rest intact.
+export function stripVins(node: any): any {
+  if (Array.isArray(node)) return node.map(stripVins);
+  if (!node || typeof node !== 'object') return node;
+  const plain = typeof node.toJSON === 'function' ? node.toJSON() : node;
+  const out: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(plain)) {
+    out[key] = VIN_KEYS.has(key.toLowerCase().replace(/[^a-z0-9]/g, '')) ? null : stripVins(value);
+  }
+  return out;
+}
 
 function redactTree(node: any): any {
   if (Array.isArray(node)) return node.map(redactTree);
