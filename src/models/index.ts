@@ -3316,6 +3316,70 @@ TruckPhoto.init(
   }
 );
 
+// A buyer's Stripe purchase of a standalone equipment item or part.
+// PENDING while the 30-minute checkout is open → PAID (webhook) | CANCELLED.
+export class EquipmentOrder extends Model {
+  declare id: string;
+  declare itemId: string;
+  declare buyerId: string;
+  declare sellerId: string;
+  declare quantity: number;
+  declare unitPrice: number;
+  declare amount: number;
+  declare platformFee: number;
+  declare sellerPayout: number;
+  declare status: string;
+  declare stripeSessionId?: string | null;
+  declare stripePaymentIntentId?: string | null;
+  declare buyerPhone?: string | null;
+  declare shippingAddress?: string | null;
+  declare paidAt?: Date | null;
+  declare readonly createdAt: Date;
+  declare readonly updatedAt: Date;
+
+  declare readonly item?: Truck;
+  declare readonly buyer?: User;
+  declare readonly seller?: User;
+}
+
+const money = (field: string) => ({
+  type: DataTypes.DECIMAL(12, 2),
+  allowNull: false,
+  get(this: Model) {
+    return Number(this.getDataValue(field));
+  },
+});
+
+EquipmentOrder.init(
+  {
+    id: { type: DataTypes.UUID, defaultValue: DataTypes.UUIDV4, primaryKey: true },
+    itemId: { type: DataTypes.UUID, allowNull: false },
+    buyerId: { type: DataTypes.UUID, allowNull: false },
+    sellerId: { type: DataTypes.UUID, allowNull: false },
+    quantity: { type: DataTypes.INTEGER, allowNull: false, defaultValue: 1 },
+    unitPrice: money('unitPrice'),
+    amount: money('amount'),
+    platformFee: money('platformFee'),
+    sellerPayout: money('sellerPayout'),
+    status: { type: DataTypes.STRING(20), allowNull: false, defaultValue: 'PENDING' },
+    stripeSessionId: { type: DataTypes.STRING(255), allowNull: true },
+    stripePaymentIntentId: { type: DataTypes.STRING(255), allowNull: true },
+    buyerPhone: { type: DataTypes.STRING(50), allowNull: true },
+    shippingAddress: { type: DataTypes.TEXT, allowNull: true },
+    paidAt: { type: DataTypes.DATE, allowNull: true },
+  },
+  {
+    sequelize,
+    tableName: 'equipment_orders',
+    indexes: [
+      { fields: ['itemId', 'status'] },
+      { fields: ['buyerId'] },
+      { fields: ['sellerId'] },
+      { unique: true, fields: ['stripeSessionId'] },
+    ],
+  }
+);
+
 // ==================== LEAD MODELS (LINQ-powered admin tool) ====================
 
 export enum LeadStatus {
@@ -4048,6 +4112,9 @@ Listing.hasMany(Truck, { foreignKey: 'listingId', as: 'trucks' });
 // Truck associations
 Truck.belongsTo(Listing, { foreignKey: 'listingId', as: 'listing' });
 Truck.belongsTo(User, { foreignKey: 'sellerId', as: 'seller' });
+EquipmentOrder.belongsTo(Truck, { foreignKey: 'itemId', as: 'item' });
+EquipmentOrder.belongsTo(User, { foreignKey: 'buyerId', as: 'buyer' });
+EquipmentOrder.belongsTo(User, { foreignKey: 'sellerId', as: 'seller' });
 User.hasMany(Truck, { foreignKey: 'sellerId', as: 'equipment' });
 Truck.hasMany(TruckPhoto, { foreignKey: 'truckId', as: 'photos' });
 TruckPhoto.belongsTo(Truck, { foreignKey: 'truckId', as: 'truck' });
@@ -4202,6 +4269,7 @@ export default {
   MatchNotificationSent,
   Truck,
   TruckPhoto,
+  EquipmentOrder,
   Message,
   Notification,
   PremiumRequest,

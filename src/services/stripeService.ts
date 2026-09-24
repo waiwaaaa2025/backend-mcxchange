@@ -1851,6 +1851,71 @@ class StripeService {
   // ============================================
 
   /**
+   * Equipment / parts purchase (standalone marketplace item). Card only, so
+   * payment is confirmed on checkout.session.completed. The seller's connected
+   * account receives the charge minus the platform fee.
+   */
+  async createEquipmentCheckout(params: {
+    customerEmail?: string;
+    itemName: string;
+    itemDescription?: string;
+    unitAmount: number; // cents
+    quantity: number;
+    applicationFee: number; // cents, platform fee on the whole order
+    sellerConnectedAccountId: string;
+    collectShipping: boolean;
+    successUrl: string;
+    cancelUrl: string;
+    metadata: Record<string, string>;
+  }): Promise<CheckoutSessionResult> {
+    if (!stripe) {
+      return { success: false, error: 'Payment service not available' };
+    }
+    const total = params.unitAmount * params.quantity;
+    if (params.applicationFee < 0 || params.applicationFee >= total) {
+      return { success: false, error: 'Invalid payment split' };
+    }
+    try {
+      const session = await stripe.checkout.sessions.create({
+        ...tosConsentOptions(),
+        mode: 'payment',
+        payment_method_types: ['card'],
+        ...(params.customerEmail && { customer_email: params.customerEmail }),
+        line_items: [
+          {
+            price_data: {
+              currency: 'usd',
+              product_data: {
+                name: params.itemName.slice(0, 250),
+                ...(params.itemDescription && { description: params.itemDescription.slice(0, 500) }),
+              },
+              unit_amount: params.unitAmount,
+            },
+            quantity: params.quantity,
+          },
+        ],
+        phone_number_collection: { enabled: true },
+        ...(params.collectShipping && { shipping_address_collection: { allowed_countries: ['US'] } }),
+        payment_intent_data: {
+          application_fee_amount: params.applicationFee,
+          transfer_data: { destination: params.sellerConnectedAccountId },
+          metadata: params.metadata,
+        },
+        // Hold the item for 30 minutes (Stripe's minimum session lifetime).
+        expires_at: Math.floor(Date.now() / 1000) + 30 * 60,
+        success_url: params.successUrl,
+        cancel_url: params.cancelUrl,
+        metadata: params.metadata,
+      });
+      logger.info('Equipment checkout session created', { sessionId: session.id, metadata: params.metadata });
+      return { success: true, sessionId: session.id, url: session.url || undefined };
+    } catch (error) {
+      logError('Failed to create equipment checkout session', error as Error);
+      return { success: false, error: (error as Error).message };
+    }
+  }
+
+  /**
    * Create a Stripe Checkout Session for the final MC payment
    * Uses Stripe Connect to split payment between seller and platform
    *

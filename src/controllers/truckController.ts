@@ -7,6 +7,7 @@ import { TruckCondition, Listing, ListingStatus, Truck, TruckPhoto, UnlockedList
 import { publicListingTitle, scrubIdentity, stripVins } from '../utils/listingSanitize';
 import { NotFoundError, BadRequestError } from '../middleware/errorHandler';
 import { equipmentMarketService, PUBLIC_ITEM_STATUSES } from '../services/equipmentMarketService';
+import { equipmentOrderService } from '../services/equipmentOrderService';
 
 const fileToPublicUrl = (file: Express.Multer.File): string => {
   const s3Url = (file as any).s3Url as string | undefined;
@@ -66,6 +67,8 @@ export const getEquipment = asyncHandler(async (req: AuthRequest, res: Response)
         canEdit: owner,
         listing: null,
         otherEquipment: [],
+        purchase: await equipmentOrderService.purchaseInfo(truck),
+        canMessageSeller: !!req.user && truck.sellerId !== req.user.id,
       },
     });
     return;
@@ -249,4 +252,32 @@ export const adminApproveMarketItem = asyncHandler(async (req: AuthRequest, res:
 
 export const adminRejectMarketItem = asyncHandler(async (req: AuthRequest, res: Response) => {
   res.json({ success: true, data: await equipmentMarketService.reject(req.params.truckId, req.body?.reason) });
+});
+
+// ==================== Equipment checkout, questions, payouts ====================
+
+export const startEquipmentCheckout = asyncHandler(async (req: AuthRequest, res: Response) => {
+  const result = await equipmentOrderService.startCheckout(req.params.truckId, req.user!, req.body?.quantity);
+  res.json({ success: true, data: result });
+});
+
+export const askEquipmentQuestion = asyncHandler(async (req: AuthRequest, res: Response) => {
+  await equipmentOrderService.askQuestion(req.params.truckId, req.user!, req.body?.content);
+  res.status(201).json({ success: true });
+});
+
+export const myEquipmentOrders = asyncHandler(async (req: AuthRequest, res: Response) => {
+  res.json({ success: true, data: await equipmentOrderService.listOrders(req.user!.id) });
+});
+
+export const payoutStatus = asyncHandler(async (req: AuthRequest, res: Response) => {
+  res.json({ success: true, data: await equipmentOrderService.payoutStatus(req.user!.id) });
+});
+
+export const payoutSetup = asyncHandler(async (req: AuthRequest, res: Response) => {
+  res.json({ success: true, data: { onboardingUrl: await equipmentOrderService.payoutOnboardingLink(req.user!.id) } });
+});
+
+export const payoutDashboard = asyncHandler(async (req: AuthRequest, res: Response) => {
+  res.json({ success: true, data: { url: await equipmentOrderService.payoutDashboardLink(req.user!.id) } });
 });

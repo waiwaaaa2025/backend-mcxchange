@@ -1,3 +1,4 @@
+import { equipmentOrderService } from '../services/equipmentOrderService';
 import { Request, Response } from 'express';
 import Stripe from 'stripe';
 import { stripeService } from '../services/stripeService';
@@ -1057,6 +1058,12 @@ async function handleCheckoutSessionCompleted(session: Stripe.Checkout.Session):
   // access gates key off) and grants CarrierPulse access.
   if (type === 'vip_pass_purchase') {
     await fulfillVipPassPurchase(session);
+  }
+
+  // Standalone equipment / parts purchase (Connect destination charge — the
+  // seller's share is transferred by Stripe; this records the order).
+  if (type === 'equipment_purchase') {
+    await equipmentOrderService.fulfill(session);
   }
 
   // Buyer's-guide tier detection: metadata.type wins; otherwise fall back to

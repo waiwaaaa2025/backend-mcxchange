@@ -1,3 +1,4 @@
+import { AUTHORITY_TALK_BLOCKED, mentionsAuthority } from '../utils/authorityTalk';
 import { Response } from 'express';
 import { body, param } from 'express-validator';
 import { messageService } from '../services/messageService';
@@ -62,6 +63,17 @@ export const sendMessage = asyncHandler(async (req: AuthRequest, res: Response) 
   }
 
   const { receiverId, content, listingId } = req.body;
+
+  // Direct user-to-user messages (equipment & parts questions) may not discuss
+  // MC authorities — those deals go through the Domilea team, so threads with
+  // an admin are exempt.
+  if (req.user.role !== UserRole.ADMIN && mentionsAuthority(content)) {
+    const receiver = await User.findByPk(receiverId, { attributes: ['id', 'role'] });
+    if (receiver && receiver.role !== UserRole.ADMIN) {
+      res.status(400).json({ success: false, error: AUTHORITY_TALK_BLOCKED });
+      return;
+    }
+  }
 
   const message = await messageService.sendMessage(
     req.user.id,
