@@ -8,6 +8,7 @@ import {
 import cacheService from './cacheService';
 import morproLinqService, { safetyLabel, type LinqSearchFilters } from './morproLinqService';
 import fmcsaLeadsService from './fmcsaLeadsService';
+import { normalizeLinqReport } from './linqReportNormalizer';
 import logger from '../utils/logger';
 import { AppError, TooManyRequestsError } from '../middleware/errorHandler';
 
@@ -288,6 +289,10 @@ class CarrierDataService {
       await cacheService.invalidateCarrierReport(dotNumber);
     } else if (cached) {
       logger.info(`Carrier report cache HIT for DOT ${dotNumber} — serving instantly`);
+      // Entries cached from LINQ before normalization still carry raw snake_case.
+      if (cached.carrier?.legal_name !== undefined && cached.carrier?.legalName === undefined) {
+        return normalizeLinqReport(cached);
+      }
       return cached;
     }
 
@@ -316,6 +321,7 @@ class CarrierDataService {
           : await this.fetchReport(up, dotNumber, timeoutMs);
 
       if (result.kind === 'ok') {
+        if (up.name === 'linq') result.report = normalizeLinqReport(result.report);
         await cacheService.cacheCarrierReport(dotNumber, result.report);
         logger.info(
           `Carrier report for DOT ${dotNumber} served by '${up.name}' in ${Date.now() - startTime}ms`
