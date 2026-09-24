@@ -1,3 +1,4 @@
+import { sanitizeListing } from '../utils/listingSanitize';
 import { Op, fn, col, QueryTypes } from 'sequelize';
 import sequelize from '../config/database';
 import {
@@ -211,14 +212,16 @@ class UserService {
       offset,
       limit,
       attributes: [
-        'id', 'mcNumber', 'dotNumber', 'title', 'askingPrice', 'listingPrice',
+        'id', 'mcNumber', 'dotNumber', 'legalName', 'dbaName', 'title', 'askingPrice', 'listingPrice',
         'city', 'state', 'isPremium', 'yearsActive',
         'safetyRating', 'amazonStatus', 'views', 'createdAt',
       ],
     });
 
+    // Public and unauthenticated: same masking as the catalogue, or a bot reads
+    // sellerId off /listings and pulls every real MC/DOT from here.
     return {
-      listings,
+      listings: listings.map(sanitizeListing),
       pagination: getPaginationInfo(page, limit, total),
     };
   }
