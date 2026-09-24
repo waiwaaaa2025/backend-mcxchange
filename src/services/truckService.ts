@@ -4,7 +4,8 @@ import { config } from '../config';
 import fs from 'fs';
 import path from 'path';
 
-export type EquipmentType = 'TRUCK' | 'TRAILER';
+export type EquipmentType = 'TRUCK' | 'TRAILER' | 'PART';
+const EQUIPMENT_TYPES: EquipmentType[] = ['TRUCK', 'TRAILER', 'PART'];
 
 export interface TruckInput {
   equipmentType?: EquipmentType | null;
@@ -20,6 +21,13 @@ export interface TruckInput {
   lengthFt?: number | null;
   engine?: string | null;
   transmission?: string | null;
+  city?: string | null;
+  state?: string | null;
+  name?: string | null;
+  partCategory?: string | null;
+  partNumber?: string | null;
+  quantity?: number | null;
+  fitment?: string | null;
 }
 
 const str = (v: unknown, max: number): string | null => {
@@ -48,7 +56,8 @@ export function normalizeTruckInput(data: Partial<TruckInput>): Record<string, u
   const out: Record<string, unknown> = {};
   const has = (k: keyof TruckInput) => Object.prototype.hasOwnProperty.call(data, k);
   if (has('equipmentType')) {
-    out.equipmentType = String(data.equipmentType || '').toUpperCase() === 'TRAILER' ? 'TRAILER' : 'TRUCK';
+    const t = String(data.equipmentType || '').toUpperCase() as EquipmentType;
+    out.equipmentType = EQUIPMENT_TYPES.includes(t) ? t : 'TRUCK';
   }
   if (has('make')) out.make = str(data.make, 100) || '';
   if (has('model')) out.model = str(data.model, 100) || '';
@@ -62,6 +71,16 @@ export function normalizeTruckInput(data: Partial<TruckInput>): Record<string, u
   if (has('lengthFt')) out.lengthFt = num(data.lengthFt, { int: true, max: 100 });
   if (has('engine')) out.engine = str(data.engine, 100);
   if (has('transmission')) out.transmission = str(data.transmission, 50);
+  if (has('city')) out.city = str(data.city, 100);
+  if (has('state')) {
+    const st = String(data.state ?? '').trim().toUpperCase();
+    out.state = /^[A-Z]{2}$/.test(st) ? st : null;
+  }
+  if (has('name')) out.name = str(data.name, 200);
+  if (has('partCategory')) out.partCategory = str(data.partCategory, 50);
+  if (has('partNumber')) out.partNumber = str(data.partNumber, 100);
+  if (has('quantity')) out.quantity = num(data.quantity, { int: true, max: 100_000 });
+  if (has('fitment')) out.fitment = str(data.fitment, 255);
   return out;
 }
 
@@ -77,10 +96,11 @@ const assertListingOwner = async (listingId: string, userId: string, isAdmin = f
 const assertTruckOwner = async (truckId: string, userId: string, isAdmin = false): Promise<Truck> => {
   const truck = await Truck.findByPk(truckId);
   if (!truck) throw new NotFoundError('Truck');
-  if (isAdmin) return truck;
-  const listing = await Listing.findByPk(truck.listingId);
+  if (isAdmin || truck.sellerId === userId) return truck;
+  // Equipment sold with an authority belongs to that listing's seller.
+  const listing = truck.listingId ? await Listing.findByPk(truck.listingId) : null;
   if (!listing || listing.sellerId !== userId) {
-    throw new ForbiddenError('You do not own this truck');
+    throw new ForbiddenError('You do not own this equipment');
   }
   return truck;
 };

@@ -107,6 +107,34 @@ export const connectDatabase = async (): Promise<void> => {
     await addColumnIfMissing('trucks', 'engine', 'VARCHAR(100) NULL');
     await addColumnIfMissing('trucks', 'transmission', 'VARCHAR(50) NULL');
 
+    // Standalone equipment & parts marketplace: items not tied to an authority
+    await addColumnIfMissing('trucks', 'sellerId', 'CHAR(36) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NULL');
+    await addColumnIfMissing('trucks', 'status', "VARCHAR(20) NOT NULL DEFAULT 'ACTIVE'");
+    await addColumnIfMissing('trucks', 'reviewNote', 'VARCHAR(500) NULL');
+    await addColumnIfMissing('trucks', 'city', 'VARCHAR(100) NULL');
+    await addColumnIfMissing('trucks', 'state', 'VARCHAR(2) NULL');
+    await addColumnIfMissing('trucks', 'name', 'VARCHAR(200) NULL');
+    await addColumnIfMissing('trucks', 'partCategory', 'VARCHAR(50) NULL');
+    await addColumnIfMissing('trucks', 'partNumber', 'VARCHAR(100) NULL');
+    await addColumnIfMissing('trucks', 'quantity', 'INT NULL');
+    await addColumnIfMissing('trucks', 'fitment', 'VARCHAR(255) NULL');
+    try {
+      const [cols]: any = await sequelize.query(
+        "SELECT IS_NULLABLE FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'trucks' AND COLUMN_NAME = 'listingId'",
+        { logging: false }
+      );
+      if (cols?.[0]?.IS_NULLABLE === 'NO') {
+        // Same type/collation as listings.id so the foreign key survives.
+        await sequelize.query(
+          'ALTER TABLE `trucks` MODIFY COLUMN `listingId` CHAR(36) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NULL',
+          { logging: false }
+        );
+        console.log('Migration: trucks.listingId is now nullable');
+      }
+    } catch (e: any) {
+      console.warn('Migration: could not make trucks.listingId nullable:', e?.message);
+    }
+
     // Escrow columns for transaction payment tracking
     await addColumnIfMissing('transactions', 'escrowAmount', 'DECIMAL(12,2) NULL');
     await addColumnIfMissing('transactions', 'escrowConfirmedAt', 'DATETIME NULL');

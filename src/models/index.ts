@@ -3191,7 +3191,21 @@ MatchNotificationSent.init(
 
 export class Truck extends Model {
   declare id: string;
-  declare listingId: string;
+  // Null for standalone equipment/parts (not sold with an authority).
+  declare listingId: string | null;
+  // Standalone items only: who listed it, where it is, and its review state.
+  // Items attached to an authority follow that listing's owner and status.
+  declare sellerId?: string | null;
+  declare status: string;
+  declare reviewNote?: string | null;
+  declare city?: string | null;
+  declare state?: string | null;
+  // Parts only ('PART' equipmentType)
+  declare name?: string | null;
+  declare partCategory?: string | null;
+  declare partNumber?: string | null;
+  declare quantity?: number | null;
+  declare fitment?: string | null;
   declare make: string;
   declare model: string;
   declare year?: number | null;
@@ -3199,7 +3213,7 @@ export class Truck extends Model {
   declare vin?: string | null;
   declare condition?: TruckCondition | null;
   declare description?: string | null;
-  // 'TRUCK' | 'TRAILER' — VARCHAR, not ENUM: sync() never widens ENUMs.
+  // 'TRUCK' | 'TRAILER' | 'PART' — VARCHAR, not ENUM: sync() never widens ENUMs.
   declare equipmentType: string;
   declare price?: number | null;
   declare trailerType?: string | null;
@@ -3212,6 +3226,7 @@ export class Truck extends Model {
 
   declare readonly photos?: TruckPhoto[];
   declare readonly listing?: Listing;
+  declare readonly seller?: User;
 }
 
 Truck.init(
@@ -3221,7 +3236,17 @@ Truck.init(
       defaultValue: DataTypes.UUIDV4,
       primaryKey: true,
     },
-    listingId: { type: DataTypes.UUID, allowNull: false },
+    listingId: { type: DataTypes.UUID, allowNull: true },
+    sellerId: { type: DataTypes.UUID, allowNull: true },
+    status: { type: DataTypes.STRING(20), allowNull: false, defaultValue: 'ACTIVE' },
+    reviewNote: { type: DataTypes.STRING(500), allowNull: true },
+    city: { type: DataTypes.STRING(100), allowNull: true },
+    state: { type: DataTypes.STRING(2), allowNull: true },
+    name: { type: DataTypes.STRING(200), allowNull: true },
+    partCategory: { type: DataTypes.STRING(50), allowNull: true },
+    partNumber: { type: DataTypes.STRING(100), allowNull: true },
+    quantity: { type: DataTypes.INTEGER, allowNull: true },
+    fitment: { type: DataTypes.STRING(255), allowNull: true },
     make: { type: DataTypes.STRING(100), allowNull: false },
     model: { type: DataTypes.STRING(100), allowNull: false },
     year: { type: DataTypes.INTEGER, allowNull: true },
@@ -3254,7 +3279,7 @@ Truck.init(
   {
     sequelize,
     tableName: 'trucks',
-    indexes: [{ fields: ['listingId'] }],
+    indexes: [{ fields: ['listingId'] }, { fields: ['sellerId'] }, { fields: ['status', 'equipmentType'] }],
   }
 );
 
@@ -4022,6 +4047,8 @@ Listing.hasMany(Truck, { foreignKey: 'listingId', as: 'trucks' });
 
 // Truck associations
 Truck.belongsTo(Listing, { foreignKey: 'listingId', as: 'listing' });
+Truck.belongsTo(User, { foreignKey: 'sellerId', as: 'seller' });
+User.hasMany(Truck, { foreignKey: 'sellerId', as: 'equipment' });
 Truck.hasMany(TruckPhoto, { foreignKey: 'truckId', as: 'photos' });
 TruckPhoto.belongsTo(Truck, { foreignKey: 'truckId', as: 'truck' });
 

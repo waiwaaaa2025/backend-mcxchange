@@ -36,4 +36,30 @@ describe('normalizeTruckInput', () => {
   it('only returns keys present in the input (partial update)', () => {
     expect(normalizeTruckInput({ price: 1000 })).toEqual({ price: 1000 });
   });
+
+  it('cleans a part entry', () => {
+    expect(
+      normalizeTruckInput({
+        equipmentType: 'part' as any,
+        make: 'Detroit',
+        name: ' DD15 Turbocharger ',
+        partNumber: 'A4720900880',
+        quantity: '2' as any,
+        state: 'tx',
+        city: 'Houston',
+      })
+    ).toEqual({
+      equipmentType: 'PART',
+      make: 'Detroit',
+      name: 'DD15 Turbocharger',
+      partNumber: 'A4720900880',
+      quantity: 2,
+      state: 'TX',
+      city: 'Houston',
+    });
+  });
+
+  it('rejects a malformed state code', () => {
+    expect(normalizeTruckInput({ state: 'Texas' })).toEqual({ state: null });
+  });
 });

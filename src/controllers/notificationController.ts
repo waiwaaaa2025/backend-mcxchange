@@ -1,3 +1,4 @@
+import { equipmentMarketService } from '../services/equipmentMarketService';
 import { Response } from 'express';
 import { Op } from 'sequelize';
 import { notificationService } from '../services/notificationService';
@@ -183,8 +184,11 @@ export const getNavBadgeCounts = asyncHandler(async (req: AuthRequest, res: Resp
     ? await Offer.count({ where: { status: OfferStatus.PENDING_ADMIN } })
     : 0;
 
+  // Standalone equipment/parts awaiting review (admin-only)
+  const pendingEquipment = role === UserRole.ADMIN ? await equipmentMarketService.pendingCount() : 0;
+
   res.json({
     success: true,
-    data: { unreadMessages, newTransactions, activeClosings, paidConsultations, pendingAdminOffers },
+    data: { unreadMessages, newTransactions, activeClosings, paidConsultations, pendingAdminOffers, pendingEquipment },
   });
 });

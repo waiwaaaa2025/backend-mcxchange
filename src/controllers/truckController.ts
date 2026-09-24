@@ -5,7 +5,8 @@ import { truckService } from '../services/truckService';
 import { config } from '../config';
 import { TruckCondition, Listing, ListingStatus, Truck, TruckPhoto, UnlockedListing, UserRole } from '../models';
 import { publicListingTitle, scrubIdentity, stripVins } from '../utils/listingSanitize';
-import { NotFoundError } from '../middleware/errorHandler';
+import { NotFoundError, BadRequestError } from '../middleware/errorHandler';
+import { equipmentMarketService, PUBLIC_ITEM_STATUSES } from '../services/equipmentMarketService';
 
 const fileToPublicUrl = (file: Express.Multer.File): string => {
   const s3Url = (file as any).s3Url as string | undefined;
@@ -47,8 +48,28 @@ export const getEquipment = asyncHandler(async (req: AuthRequest, res: Response)
     ],
     order: [[{ model: TruckPhoto, as: 'photos' }, 'displayOrder', 'ASC']],
   });
-  const listing = truck?.listing;
-  if (!truck || !listing) throw new NotFoundError('Equipment');
+  if (!truck) throw new NotFoundError('Equipment');
+  const listing = truck.listing;
+
+  // Standalone item: its own seller and review status, no authority to mask.
+  if (!listing) {
+    const owner = isAdmin(req) || (!!req.user && truck.sellerId === req.user.id);
+    if (!owner && !PUBLIC_ITEM_STATUSES.includes(truck.status)) throw new NotFoundError('Equipment');
+    const item: any = truck.toJSON();
+    delete item.listing;
+    res.json({
+      success: true,
+      data: {
+        // Unlike authority equipment, a standalone VIN names no carrier to protect.
+        equipment: item,
+        vinOnFile: !!truck.vin,
+        canEdit: owner,
+        listing: null,
+        otherEquipment: [],
+      },
+    });
+    return;
+  }
 
   const entitled = await canSeeIdentity(req, listing);
   const owner = isAdmin(req) || listing.sellerId === req.user?.id;
@@ -184,3 +205,48 @@ export const validateCondition = (value: unknown): TruckCondition | null => {
   const v = String(value).toUpperCase();
   return (Object.values(TruckCondition) as string[]).includes(v) ? (v as TruckCondition) : null;
 };
+
+// ==================== Equipment & parts marketplace ====================
+
+export const browseEquipment = asyncHandler(async (req: AuthRequest, res: Response) => {
+  const q = req.query as Record<string, string | undefined>;
+  const result = await equipmentMarketService.browse({
+    type: q.type,
+    search: q.search,
+    state: q.state,
+    minPrice: q.minPrice ? Number(q.minPrice) : undefined,
+    maxPrice: q.maxPrice ? Number(q.maxPrice) : undefined,
+    page: q.page ? Number(q.page) : undefined,
+    limit: q.limit ? Number(q.limit) : undefined,
+  });
+  res.json({ success: true, data: result.items, pagination: result.pagination });
+});
+
+export const createMarketItem = asyncHandler(async (req: AuthRequest, res: Response) => {
+  const item = await equipmentMarketService.create(req.user!, req.body);
+  res.status(201).json({ success: true, data: item });
+});
+
+export const myMarketItems = asyncHandler(async (req: AuthRequest, res: Response) => {
+  res.json({ success: true, data: await equipmentMarketService.mine(req.user!.id) });
+});
+
+export const setMarketItemStatus = asyncHandler(async (req: AuthRequest, res: Response) => {
+  const status = String(req.body?.status || '').toUpperCase();
+  if (!status) throw new BadRequestError('Status is required');
+  const item = await equipmentMarketService.setStatus(req.params.truckId, req.user!, status);
+  res.json({ success: true, data: item });
+});
+
+export const adminListMarketItems = asyncHandler(async (req: AuthRequest, res: Response) => {
+  const status = String(req.query.status || 'PENDING_REVIEW').toUpperCase();
+  res.json({ success: true, data: await equipmentMarketService.adminList(status as any) });
+});
+
+export const adminApproveMarketItem = asyncHandler(async (req: AuthRequest, res: Response) => {
+  res.json({ success: true, data: await equipmentMarketService.approve(req.params.truckId) });
+});
+
+export const adminRejectMarketItem = asyncHandler(async (req: AuthRequest, res: Response) => {
+  res.json({ success: true, data: await equipmentMarketService.reject(req.params.truckId, req.body?.reason) });
+});
