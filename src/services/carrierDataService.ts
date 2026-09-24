@@ -289,8 +289,9 @@ class CarrierDataService {
       await cacheService.invalidateCarrierReport(dotNumber);
     } else if (cached) {
       logger.info(`Carrier report cache HIT for DOT ${dotNumber} — serving instantly`);
-      // Entries cached from LINQ before normalization still carry raw snake_case.
-      if (cached.carrier?.legal_name !== undefined && cached.carrier?.legalName === undefined) {
+      // LINQ-sourced entries (they keep raw snake_case fields) are re-normalized
+      // on read, so ones cached before a normalizer fix pick it up too.
+      if (cached.carrier?.legal_name !== undefined) {
         return normalizeLinqReport(cached);
       }
       return cached;

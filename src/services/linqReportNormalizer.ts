@@ -152,8 +152,11 @@ function dedupePolicies<T extends { policyNumber: unknown; type: unknown; effect
 
 function normalizeInsurance(i: any): any {
   const activePolicies = dedupePolicies((i.active_policies || []).map(mapPolicy));
-  const history = dedupePolicies(
-    (i.history || []).map((p: any) => {
+  // `history` is both LINQ's raw field and the legacy one — leave it alone when
+  // it's already mapped, so re-normalizing a cached report is a no-op.
+  const rawHistory: any[] = i.history || [];
+  const history = rawHistory.some((p) => p && 'policyNumber' in p) ? rawHistory : dedupePolicies(
+    rawHistory.map((p: any) => {
       const m = mapPolicy(p);
       return { ...m, date: m.effectiveDate, event: m.cancelDate ? 'CANCELLED' : 'FILED' };
     })
@@ -174,7 +177,11 @@ function normalizeSafety(s: any): any {
     alert: !!b.alert,
     description: '',
   }));
-  return { ...s, basicScores, safetyRating: { rating: s.safety_rating ?? null, date: s.safety_rating_date ?? null } };
+  // No `safetyRating` here: the legacy safety section has none, and the create-
+  // listing pages read `safety.safetyRating` as a string (the rating lives on
+  // carrier.safetyRating and documents.safetyRating).
+  const { safetyRating: _drop, ...rest } = s;
+  return { ...rest, basicScores };
 }
 
 function normalizeDocuments(d: any, carrier: any): any {
@@ -185,14 +192,17 @@ function normalizeDocuments(d: any, carrier: any): any {
     mcs150: {
       date: linqDate(d.mcs150?.date),
       mileage: d.mcs150?.mileage != null ? String(d.mcs150.mileage) : null,
-      year: d.mcs150?.mileage_year ?? null,
+      year: d.mcs150?.mileage_year ?? d.mcs150?.year ?? null,
     },
     safetyRating: { rating: carrier?.safety_rating ?? null, date: carrier?.safety_rating_date ?? null },
     verificationChecks: [],
   };
 }
 
-/** Map a report fetched from LINQ onto the legacy report shape. */
+/**
+ * Map a report fetched from LINQ onto the legacy report shape. Idempotent — the
+ * raw LINQ fields are kept, so an already-normalized report maps to the same.
+ */
 export function normalizeLinqReport(r: MorProCarrierReport): MorProCarrierReport {
   const authority = r.authority || {};
   return {
