@@ -1699,6 +1699,7 @@ class StripeService {
     destinationAccountId: string;
     description?: string;
     metadata?: Record<string, string>;
+    idempotencyKey?: string;
   }): Promise<{
     success: boolean;
     transferId?: string;
@@ -1709,13 +1710,16 @@ class StripeService {
     }
 
     try {
-      const transfer = await stripe.transfers.create({
-        amount: params.amount,
-        currency: 'usd',
-        destination: params.destinationAccountId,
-        description: params.description,
-        metadata: params.metadata,
-      });
+      const transfer = await stripe.transfers.create(
+        {
+          amount: params.amount,
+          currency: 'usd',
+          destination: params.destinationAccountId,
+          description: params.description,
+          metadata: params.metadata,
+        },
+        params.idempotencyKey ? { idempotencyKey: params.idempotencyKey } : undefined
+      );
 
       logger.info('Transfer created', {
         transferId: transfer.id,
@@ -1982,6 +1986,8 @@ class StripeService {
           mcNumber: params.mcNumber,
           sellerPayout: String(params.sellerPayout),
           applicationFee: String(applicationFee),
+          // Stripe pays the seller at charge time — no admin release needed.
+          payoutMode: 'connect_split',
         },
       });
 

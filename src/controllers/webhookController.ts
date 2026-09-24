@@ -661,6 +661,44 @@ async function handleChargeDisputeCreated(dispute: Stripe.Dispute): Promise<void
 // Checkout Session Handlers
 // ============================================
 
+const PAID_VIA_CONNECT = 'PAID_VIA_CONNECT';
+
+/**
+ * Seller payout / platform fee (dollars) from final_payment session metadata.
+ * Both checkout paths send cents under `sellerPayout` / `applicationFee` and a
+ * `payoutMode`. Sessions created before payoutMode existed: the Connect split
+ * sent cents + applicationFee; the platform-collected fallback sent DOLLARS
+ * under `sellerPayout` / `platformFee`.
+ */
+export function parseFinalPaymentSplit(metadata: Stripe.Metadata | null | undefined): {
+  sellerPayout: number;
+  platformFee: number;
+  paidViaConnect: boolean;
+} {
+  const num = (v: string | undefined) => {
+    const n = Number(v);
+    return isFinite(n) ? n : 0;
+  };
+  const mode = metadata?.payoutMode;
+  if (mode === 'connect_split' || mode === 'manual') {
+    return {
+      sellerPayout: num(metadata?.sellerPayout) / 100,
+      platformFee: num(metadata?.applicationFee) / 100,
+      paidViaConnect: mode === 'connect_split',
+    };
+  }
+  if (metadata?.applicationFee !== undefined) {
+    // Legacy Connect split
+    return {
+      sellerPayout: num(metadata.sellerPayout) / 100,
+      platformFee: num(metadata.applicationFee) / 100,
+      paidViaConnect: true,
+    };
+  }
+  // Legacy platform-collected fallback (dollars)
+  return { sellerPayout: num(metadata?.sellerPayout), platformFee: num(metadata?.platformFee), paidViaConnect: false };
+}
+
 async function handleCheckoutSessionCompleted(session: Stripe.Checkout.Session): Promise<void> {
   logger.info('Checkout session completed', {
     sessionId: session.id,
@@ -864,16 +902,20 @@ async function handleCheckoutSessionCompleted(session: Stripe.Checkout.Session):
     const transaction = await Transaction.findByPk(transactionId);
     if (transaction && transaction.status === TransactionStatus.PAYMENT_PENDING) {
       const amountPaid = session.amount_total ? session.amount_total / 100 : 0;
-      const sellerPayoutCents = parseInt(metadata?.sellerPayout || '0');
-      const applicationFeeCents = parseInt(metadata?.applicationFee || '0');
+      const { sellerPayout, platformFee, paidViaConnect } = parseFinalPaymentSplit(metadata);
+      const sellerPayoutCents = Math.round(sellerPayout * 100);
+      const applicationFeeCents = Math.round(platformFee * 100);
 
       await transaction.update({
         status: TransactionStatus.PAYMENT_RECEIVED,
         finalPaymentAmount: amountPaid,
         finalPaidAt: new Date(),
         finalPaymentMethod: 'STRIPE' as any,
-        sellerPayout: sellerPayoutCents / 100,
-        platformFee: applicationFeeCents / 100,
+        sellerPayout,
+        platformFee,
+        // A Connect split already paid the seller; flag it so the admin
+        // "release payout" can't transfer the same money a second time.
+        ...(paidViaConnect && { payoutStatus: PAID_VIA_CONNECT, payoutReleasedAt: new Date() }),
       });
 
       // Create Payment record
@@ -883,7 +925,7 @@ async function handleCheckoutSessionCompleted(session: Stripe.Checkout.Session):
         status: PaymentStatus.COMPLETED,
         method: 'STRIPE',
         stripePaymentId: session.payment_intent as string,
-        description: `Final payment for MC #${mcNumber || 'N/A'} via Stripe Connect`,
+        description: `Final payment for MC #${mcNumber || 'N/A'} ${paidViaConnect ? 'via Stripe Connect' : 'to platform (manual payout)'}`,
         completedAt: new Date(),
         transactionId,
         userId: buyerId,
@@ -906,7 +948,9 @@ async function handleCheckoutSessionCompleted(session: Stripe.Checkout.Session):
       await notificationService.notifyTransactionStatus(
         sellerId,
         'Final Payment Received',
-        `The buyer has completed the final payment of $${amountPaid.toLocaleString()} for MC #${mcNumber || 'N/A'}. Funds will be deposited to your connected account.`,
+        paidViaConnect
+          ? `The buyer has completed the final payment of $${amountPaid.toLocaleString()} for MC #${mcNumber || 'N/A'}. Funds will be deposited to your connected account.`
+          : `The buyer has completed the final payment of $${amountPaid.toLocaleString()} for MC #${mcNumber || 'N/A'}. Domilea will release your payout once the transfer is complete.`,
         transactionId
       );
 

@@ -506,11 +506,15 @@ export const createFinalPaymentCheckout = asyncHandler(async (req: AuthRequest, 
       cancelUrl: `${frontendUrl}/transaction/${transaction.id}?payment=cancelled`,
       productName: 'MC Authority - Final Payment',
       productDescription: `Final payment for MC #${mcNumber} purchase`,
+      // Amounts in cents under the same keys as the Connect split, so the
+      // webhook records them the same way. payoutMode tells it the platform
+      // holds the funds and an admin must release the seller's payout.
       metadata: {
         type: 'final_payment',
         sellerId: transaction.sellerId,
-        sellerPayout: String(sellerPayout),
-        platformFee: String(platformCommission),
+        sellerPayout: String(Math.round(sellerPayout * 100)),
+        applicationFee: String(Math.round(platformCommission * 100)),
+        payoutMode: 'manual',
       },
     });
   }

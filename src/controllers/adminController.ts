@@ -3,7 +3,8 @@ import { body } from 'express-validator';
 import { adminService } from '../services/adminService';
 import { asyncHandler, NotFoundError, BadRequestError } from '../middleware/errorHandler';
 import { AuthRequest } from '../types';
-import { PremiumRequestStatus, Transaction, User, Listing, TransactionTimeline, Notification, TransactionStatus, NotificationType, BrokerOutreachStatus } from '../models';
+import { PremiumRequestStatus, Transaction, User, Listing, TransactionTimeline, Notification, TransactionStatus, NotificationType, BrokerOutreachStatus, Payment, PaymentType, PaymentStatus } from '../models';
+import { Op } from 'sequelize';
 import { parseIntParam, parseBooleanParam } from '../utils/helpers';
 import { stripeService } from '../services/stripeService';
 import { pricingConfigService } from '../services/pricingConfigService';
@@ -1675,8 +1676,28 @@ export const releasePayoutToSeller = asyncHandler(async (req: AuthRequest, res: 
     throw new BadRequestError('Transaction must be completed before releasing payout');
   }
 
-  if (transaction.payoutStatus === 'RELEASED') {
+  if (transaction.payoutStatus === 'PAID_VIA_CONNECT') {
+    throw new BadRequestError('The seller was already paid automatically by Stripe with the final payment');
+  }
+  if (transaction.payoutStatus) {
+    // RELEASED, INSTANT_RELEASED, or RELEASING (another release in flight)
     throw new BadRequestError('Payout has already been released for this transaction');
+  }
+
+  // A final payment made as a Stripe Connect split paid the seller at charge
+  // time. Transactions paid before that was recorded on payoutStatus are
+  // caught by asking Stripe whether the payment carried a transfer.
+  const finalPayment = await Payment.findOne({
+    where: { transactionId: transaction.id, type: PaymentType.FINAL_PAYMENT, status: PaymentStatus.COMPLETED },
+    order: [['createdAt', 'DESC']],
+  });
+  if (finalPayment?.stripePaymentId) {
+    const stripe = stripeService.getStripe();
+    const pi = stripe ? await stripe.paymentIntents.retrieve(finalPayment.stripePaymentId).catch(() => null) : null;
+    if (pi?.transfer_data?.destination) {
+      await transaction.update({ payoutStatus: 'PAID_VIA_CONNECT' });
+      throw new BadRequestError('The seller was already paid automatically by Stripe with the final payment');
+    }
   }
 
   const seller = (transaction as any).seller as User;
@@ -1719,8 +1740,19 @@ export const releasePayoutToSeller = asyncHandler(async (req: AuthRequest, res: 
     }
   }
 
+  // Claim the payout atomically so a double click or two admins can't both
+  // transfer: only one request moves payoutStatus from NULL to RELEASING.
+  const [claimed] = await Transaction.update(
+    { payoutStatus: 'RELEASING' },
+    { where: { id: transaction.id, payoutStatus: { [Op.is]: null } } }
+  );
+  if (claimed === 0) {
+    throw new BadRequestError('Payout has already been released for this transaction');
+  }
+
   // Step 1: Transfer funds from platform to seller's Connect account balance
   const transferResult = await stripeService.createTransfer({
+    idempotencyKey: `seller-payout-${transaction.id}`,
     amount: amountInCents,
     destinationAccountId: seller.stripeAccountId,
     description: `Payout for MC #${mcNumber} sale - Transaction ${transaction.id}`,
@@ -1734,6 +1766,7 @@ export const releasePayoutToSeller = asyncHandler(async (req: AuthRequest, res: 
   });
 
   if (!transferResult.success) {
+    await Transaction.update({ payoutStatus: null }, { where: { id: transaction.id, payoutStatus: 'RELEASING' } });
     logger.error('Failed to release payout to seller', {
       transactionId: transaction.id,
       sellerId: seller.id,
