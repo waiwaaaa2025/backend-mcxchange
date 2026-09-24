@@ -1,3 +1,4 @@
+import type { TruckInput } from './truckService';
 import { Op, QueryTypes } from 'sequelize';
 import { publicListingTitle, scrubIdentity } from '../utils/listingSanitize';
 import sequelize from '../config/database';
@@ -2228,6 +2229,7 @@ class AdminService {
     fmcsaData?: string;
     authorityHistory?: string;
     insuranceHistory?: string;
+    trucks?: TruckInput[];
   }) {
     // Verify seller exists
     const seller = await User.findByPk(data.sellerId);
@@ -2285,6 +2287,14 @@ class AdminService {
       authorityHistory: data.authorityHistory || null,
       insuranceHistory: data.insuranceHistory || null,
     });
+
+    // Equipment (trucks/trailers) sold with the authority. Returned on the
+    // listing, in input order, so the caller can attach photos to each item.
+    if (Array.isArray(data.trucks) && data.trucks.length > 0) {
+      const { truckService } = await import('./truckService');
+      const created = await truckService.createMany(listing.id, data.trucks);
+      listing.setDataValue('trucks' as any, created as any);
+    }
 
     // Record admin action
     await AdminAction.create({

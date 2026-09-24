@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import {
   listTrucks,
+  getEquipment,
   createTruck,
   updateTruck,
   deleteTruck,
@@ -16,7 +17,10 @@ const router = Router();
 // Public: anyone can view trucks attached to a listing (respects listing visibility elsewhere)
 router.get('/listings/:listingId/trucks', optionalAuth, blockFlaggedIps, listTrucks);
 
-// Seller-only: manage trucks on their own listings
+// Public: a single piece of equipment (truck or trailer) — its own listing page
+router.get('/equipment/:truckId', optionalAuth, blockFlaggedIps, getEquipment);
+
+// Seller (own listings) or admin: manage equipment
 router.post('/listings/:listingId/trucks', authenticate, createTruck);
 router.put('/trucks/:truckId', authenticate, updateTruck);
 router.delete('/trucks/:truckId', authenticate, deleteTruck);

@@ -99,6 +99,14 @@ export const connectDatabase = async (): Promise<void> => {
       "ENUM('MOTOR_CARRIER','BROKER','MOTOR_CARRIER_AND_BROKER','FREIGHT_FORWARDER') NOT NULL DEFAULT 'MOTOR_CARRIER'"
     );
 
+    // Equipment (trucks/trailers) sold alongside an authority
+    await addColumnIfMissing('trucks', 'equipmentType', "VARCHAR(20) NOT NULL DEFAULT 'TRUCK'");
+    await addColumnIfMissing('trucks', 'price', 'DECIMAL(12,2) NULL');
+    await addColumnIfMissing('trucks', 'trailerType', 'VARCHAR(50) NULL');
+    await addColumnIfMissing('trucks', 'lengthFt', 'INT NULL');
+    await addColumnIfMissing('trucks', 'engine', 'VARCHAR(100) NULL');
+    await addColumnIfMissing('trucks', 'transmission', 'VARCHAR(50) NULL');
+
     // Escrow columns for transaction payment tracking
     await addColumnIfMissing('transactions', 'escrowAmount', 'DECIMAL(12,2) NULL');
     await addColumnIfMissing('transactions', 'escrowConfirmedAt', 'DATETIME NULL');

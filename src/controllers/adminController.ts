@@ -729,6 +729,7 @@ export const createListing = asyncHandler(async (req: AuthRequest, res: Response
     fmcsaData,
     authorityHistory,
     insuranceHistory,
+    trucks,
   } = req.body;
 
   const listing = await adminService.createListing({
@@ -774,6 +775,7 @@ export const createListing = asyncHandler(async (req: AuthRequest, res: Response
     fmcsaData,
     authorityHistory,
     insuranceHistory,
+    trucks: Array.isArray(trucks) ? trucks : undefined,
   });
 
   res.status(201).json({
@@ -868,6 +870,7 @@ export const createUserWithListing = asyncHandler(async (req: AuthRequest, res: 
       status: listingData.status || 'ACTIVE',
       createdByAdminId: req.user.id,
       adminNotes: listingData.adminNotes,
+      trucks: Array.isArray(listingData.trucks) ? listingData.trucks : undefined,
     });
   }
 

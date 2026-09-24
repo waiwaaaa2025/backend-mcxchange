@@ -3199,11 +3199,19 @@ export class Truck extends Model {
   declare vin?: string | null;
   declare condition?: TruckCondition | null;
   declare description?: string | null;
+  // 'TRUCK' | 'TRAILER' — VARCHAR, not ENUM: sync() never widens ENUMs.
+  declare equipmentType: string;
+  declare price?: number | null;
+  declare trailerType?: string | null;
+  declare lengthFt?: number | null;
+  declare engine?: string | null;
+  declare transmission?: string | null;
   declare displayOrder: number;
   declare readonly createdAt: Date;
   declare readonly updatedAt: Date;
 
   declare readonly photos?: TruckPhoto[];
+  declare readonly listing?: Listing;
 }
 
 Truck.init(
@@ -3224,6 +3232,19 @@ Truck.init(
       allowNull: true,
     },
     description: { type: DataTypes.TEXT, allowNull: true },
+    equipmentType: { type: DataTypes.STRING(20), allowNull: false, defaultValue: 'TRUCK' },
+    price: {
+      type: DataTypes.DECIMAL(12, 2),
+      allowNull: true,
+      get() {
+        const v = this.getDataValue('price');
+        return v == null ? null : Number(v);
+      },
+    },
+    trailerType: { type: DataTypes.STRING(50), allowNull: true },
+    lengthFt: { type: DataTypes.INTEGER, allowNull: true },
+    engine: { type: DataTypes.STRING(100), allowNull: true },
+    transmission: { type: DataTypes.STRING(50), allowNull: true },
     displayOrder: {
       type: DataTypes.INTEGER,
       allowNull: false,
