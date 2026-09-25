@@ -39,6 +39,19 @@ describe('blockFlaggedIps', () => {
     expect(res.status).toHaveBeenCalledWith(403);
   });
 
+  it('refuses the Highway bot from any IP', async () => {
+    isBlocked.mockResolvedValue(false);
+    const { res, next } = await run({ ip: '198.51.100.7', headers: { 'user-agent': 'Highway-Domilea-Monitor/1.0' } });
+    expect(res.status).toHaveBeenCalledWith(403);
+    expect(next).not.toHaveBeenCalled();
+  });
+
+  it('lets an ordinary browser through from an unblocked IP', async () => {
+    isBlocked.mockResolvedValue(false);
+    const { next } = await run({ ip: '198.51.100.7', headers: { 'user-agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) Chrome/154.0.0.0' } });
+    expect(next).toHaveBeenCalled();
+  });
+
   it('fails open if the block list cannot be read', async () => {
     isBlocked.mockRejectedValue(new Error('db down'));
     const { next } = await run({ ip: '203.0.113.9', headers: {} });
