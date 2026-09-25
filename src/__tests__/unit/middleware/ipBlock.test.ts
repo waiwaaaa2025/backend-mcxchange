@@ -25,12 +25,18 @@ describe('blockFlaggedIps', () => {
     expect(next).not.toHaveBeenCalled();
   });
 
-  it('lets a signed-in user through from the same IP', async () => {
+  it('refuses a signed-in user from a blocked IP', async () => {
     isBlocked.mockResolvedValue(true);
-    const { res, next } = await run({ ip: '203.0.113.9', headers: {}, user: { id: 'u1' } });
+    const { res, next } = await run({ ip: '203.0.113.9', headers: {}, user: { id: 'u1', role: 'BUYER' } });
+    expect(res.status).toHaveBeenCalledWith(403);
+    expect(next).not.toHaveBeenCalled();
+  });
+
+  it('lets an admin through from a blocked IP', async () => {
+    isBlocked.mockResolvedValue(true);
+    const { res, next } = await run({ ip: '203.0.113.9', headers: {}, user: { id: 'a1', role: 'ADMIN' } });
     expect(next).toHaveBeenCalled();
     expect(res.status).not.toHaveBeenCalled();
-    expect(isBlocked).not.toHaveBeenCalled();
   });
 
   it('keys on the address the proxy saw, not a forged X-Forwarded-For', async () => {
