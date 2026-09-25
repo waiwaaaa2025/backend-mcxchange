@@ -3,7 +3,7 @@ import { body } from 'express-validator';
 import { adminService } from '../services/adminService';
 import { asyncHandler, NotFoundError, BadRequestError } from '../middleware/errorHandler';
 import { AuthRequest } from '../types';
-import { PremiumRequestStatus, Transaction, User, Listing, TransactionTimeline, Notification, TransactionStatus, NotificationType, BrokerOutreachStatus, Payment, PaymentType, PaymentStatus } from '../models';
+import { PremiumRequestStatus, Transaction, User, Listing, TransactionTimeline, Notification, TransactionStatus, NotificationType, BrokerOutreachStatus, Payment, PaymentType, PaymentStatus, Subscription, UserRole } from '../models';
 import { sellerNetPayout } from '../utils/helpers';
 import { Op } from 'sequelize';
 import { parseIntParam, parseBooleanParam } from '../utils/helpers';
@@ -939,6 +939,46 @@ export const getUserDisputeEvidenceFields = asyncHandler(async (req: AuthRequest
     return;
   }
   res.json({ success: true, data: result });
+});
+
+// Download every user's email (plus basic account info) as CSV. Optional
+// ?role=BUYER|SELLER|ADMIN|COMPLIANCE_MANAGER narrows the export.
+export const exportUserEmails = asyncHandler(async (req: AuthRequest, res: Response) => {
+  const role = typeof req.query.role === 'string' ? req.query.role.toUpperCase() : '';
+  const where: any = {};
+  if (role && role !== 'ALL') {
+    if (!Object.values(UserRole).includes(role as UserRole)) {
+      throw new BadRequestError(`Invalid role: ${role}`);
+    }
+    where.role = role;
+  }
+
+  const users = await User.findAll({
+    where,
+    attributes: ['email', 'name', 'phone', 'role', 'status', 'companyName', 'state', 'emailVerified', 'createdAt', 'lastLoginAt'],
+    include: [{ model: Subscription, as: 'subscription', attributes: ['plan', 'status'], required: false }],
+    order: [['createdAt', 'DESC']],
+  });
+
+  const esc = (v: unknown) => {
+    if (v === null || v === undefined) return '';
+    let s = v instanceof Date ? v.toISOString() : String(v);
+    // Neutralize spreadsheet formula injection from user-supplied fields.
+    if (/^[=+\-@\t\r]/.test(s)) s = `'${s}`;
+    return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+  };
+  const header = ['Email', 'Name', 'Phone', 'Role', 'Status', 'Company', 'State', 'Email Verified', 'Subscription Plan', 'Subscription Status', 'Signed Up', 'Last Login'];
+  const rows = users.map((u: any) => [
+    u.email, u.name, u.phone, u.role, u.status, u.companyName, u.state,
+    u.emailVerified ? 'Yes' : 'No', u.subscription?.plan, u.subscription?.status,
+    u.createdAt, u.lastLoginAt,
+  ].map(esc).join(','));
+
+  const date = new Date().toISOString().slice(0, 10);
+  const suffix = role && role !== 'ALL' ? `-${role.toLowerCase()}` : '';
+  res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+  res.setHeader('Content-Disposition', `attachment; filename="domilea-user-emails${suffix}-${date}.csv"`);
+  res.end('﻿' + [header.join(','), ...rows].join('\r\n'));
 });
 
 // Download the Terms of Service PDF (payment & dispute provisions) to upload into

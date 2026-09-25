@@ -55,6 +55,7 @@ import {
   getUserDisputeEvidence,
   getUserDisputeEvidenceFields,
   getTermsOfServicePdf,
+  exportUserEmails,
   getOpenStripeDisputes,
   cancelUserSubscription,
   resetUserPassword,
@@ -131,6 +132,7 @@ router.get('/users/:id/listings-for-deposit', getUserListingsForDeposit);
 router.get('/users/:id/dispute-evidence', getUserDisputeEvidence);
 router.get('/users/:id/dispute-evidence-fields', getUserDisputeEvidenceFields);
 router.get('/terms-of-service.pdf', getTermsOfServicePdf);
+router.get('/user-emails.csv', exportUserEmails);
 router.get('/disputes/stripe-open', getOpenStripeDisputes);
 router.post('/users/:id/manual-deposit', validate(recordManualDepositValidation), recordManualDeposit);
 router.post('/users/:id/cancel-subscription', cancelUserSubscription);
