@@ -74,6 +74,19 @@ describe('sanitizeFmcsaData', () => {
   });
 });
 
+describe('sanitizeListing sold price', () => {
+  it('withholds the price of a sold listing', () => {
+    const out = sanitizeListing({ mcNumber: '674843', status: 'SOLD', askingPrice: '15000.00', listingPrice: '16000.00' });
+    expect(out.askingPrice).toBeNull();
+    expect(out.listingPrice).toBeNull();
+  });
+
+  it('keeps the price of an active listing', () => {
+    const out = sanitizeListing({ mcNumber: '674843', status: 'ACTIVE', askingPrice: '15000.00' });
+    expect(out.askingPrice).toBe('15000.00');
+  });
+});
+
 describe('sanitizeListing', () => {
   const listing = {
     id: 'abc',

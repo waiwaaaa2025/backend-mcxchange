@@ -173,6 +173,13 @@ export function sanitizeListing(listing: any): any {
   if (safe.dotNumber) safe.dotNumber = maskNumber(safe.dotNumber);
   safe.fmcsaData = sanitizeFmcsaData(safe.fmcsaData);
 
+  // What a business sold for stays private between the parties — the public
+  // "Recently Sold" cards show that it sold, not the price.
+  if (String(safe.status || '').toUpperCase() === 'SOLD') {
+    safe.askingPrice = null;
+    safe.listingPrice = null;
+  }
+
   // The seller's direct line, released on unlock like seller.email/phone.
   safe.contactEmail = null;
   safe.contactPhone = null;
