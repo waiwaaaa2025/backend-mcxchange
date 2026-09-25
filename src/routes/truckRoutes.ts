@@ -22,17 +22,16 @@ import {
   deleteTruckPhoto,
 } from '../controllers/truckController';
 import { authenticate, optionalAuth, adminOnly } from '../middleware/auth';
-import { blockFlaggedIps } from '../middleware/ipBlock';
 import { uploadTruckPhotos } from '../middleware/upload';
 
 const router = Router();
 
 // Public: anyone can view trucks attached to a listing (respects listing visibility elsewhere)
-router.get('/listings/:listingId/trucks', optionalAuth, blockFlaggedIps, listTrucks);
+router.get('/listings/:listingId/trucks', optionalAuth, listTrucks);
 
 // Equipment & parts marketplace — any signed-in account may list (authorities
 // stay seller-only). Static paths before `/equipment/:truckId`.
-router.get('/equipment', optionalAuth, blockFlaggedIps, browseEquipment);
+router.get('/equipment', optionalAuth, browseEquipment);
 router.get('/equipment/mine', authenticate, myMarketItems);
 router.get('/equipment/orders', authenticate, myEquipmentOrders);
 router.post('/equipment/:truckId/checkout', authenticate, startEquipmentCheckout);
@@ -50,7 +49,7 @@ router.post('/admin/equipment/:truckId/approve', authenticate, adminOnly, adminA
 router.post('/admin/equipment/:truckId/reject', authenticate, adminOnly, adminRejectMarketItem);
 
 // Public: a single piece of equipment, trailer or part — its own listing page
-router.get('/equipment/:truckId', optionalAuth, blockFlaggedIps, getEquipment);
+router.get('/equipment/:truckId', optionalAuth, getEquipment);
 
 // Seller (own listings) or admin: manage equipment
 router.post('/listings/:listingId/trucks', authenticate, createTruck);

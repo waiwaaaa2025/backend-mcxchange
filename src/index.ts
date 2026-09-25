@@ -10,6 +10,7 @@ import { connectRedis, disconnectRedis, isRedisHealthy } from './config/redis';
 import { initializeWebSocket } from './websocket';
 import routes from './routes';
 import webhookRoutes from './routes/webhookRoutes';
+import { blockFlaggedIps } from './middleware/ipBlock';
 import {
   errorHandler,
   notFoundHandler,
@@ -128,6 +129,11 @@ app.use(express.json({
   }
 }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
+
+// ============================================
+// Blocked IPs / scraper bots — refused site-wide (admins exempt)
+// ============================================
+app.use(blockFlaggedIps);
 
 // ============================================
 // Static Files for Uploads

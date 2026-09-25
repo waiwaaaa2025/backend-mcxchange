@@ -10,7 +10,6 @@ import {
   getCargoCarried,
 } from '../controllers/fmcsaController';
 import { optionalAuth } from '../middleware/auth';
-import { blockFlaggedIps } from '../middleware/ipBlock';
 import { anonymousCarrierDataLimiter, anonymousLookupLimiter, fmcsaLimiter } from '../middleware/rateLimiter';
 
 const router = Router();
@@ -19,13 +18,13 @@ const router = Router();
 // these before signup. Anonymous callers are held to a few per hour so they
 // can't sweep an MC range to unmask a listing; signed-in users get the normal
 // FMCSA limit.
-router.get('/mc/:mcNumber', optionalAuth, blockFlaggedIps, anonymousLookupLimiter, fmcsaLimiter, lookupByMC);
-router.get('/verify/:mcNumber', optionalAuth, blockFlaggedIps, anonymousLookupLimiter, fmcsaLimiter, verifyMC);
+router.get('/mc/:mcNumber', optionalAuth, anonymousLookupLimiter, fmcsaLimiter, lookupByMC);
+router.get('/verify/:mcNumber', optionalAuth, anonymousLookupLimiter, fmcsaLimiter, verifyMC);
 
 // Carrier detail by DOT. Public too: the Carrier Pulse preview renders these
 // for logged-out visitors. With MC/DOT fully masked on listings there is no
 // partial number left to sweep, so a per-IP hourly cap is enough here.
-const carrierData = [optionalAuth, blockFlaggedIps, anonymousCarrierDataLimiter, fmcsaLimiter];
+const carrierData = [optionalAuth, anonymousCarrierDataLimiter, fmcsaLimiter];
 router.get('/dot/:dotNumber', ...carrierData, lookupByDOT);
 router.get('/snapshot/:identifier', ...carrierData, getCarrierSnapshot);
 router.get('/authority/:dotNumber', ...carrierData, getAuthorityHistory);
