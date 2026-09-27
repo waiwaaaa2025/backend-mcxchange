@@ -2786,9 +2786,45 @@ class AdminService {
       return { active, status: b.status, source: b.source, reason: b.reason, expiresAt: b.expiresAt, hits: b.hits, updatedAt: b.updatedAt };
     };
 
+    // MC unlocks in the same window, with the IP they came from. recordAccess
+    // writes detail as "listing <id>" or "listing <id> (re-access)".
+    const unlockRows = await sequelize.query<{
+      createdAt: Date;
+      ipAddress: string | null;
+      userAgent: string | null;
+      detail: string | null;
+      userId: string;
+      userName: string | null;
+      userEmail: string | null;
+      listingId: string | null;
+      mcNumber: string | null;
+      legalName: string | null;
+    }>(
+      `SELECT
+         l.createdAt, l.ipAddress, l.userAgent, l.detail, l.userId,
+         u.name AS userName, u.email AS userEmail,
+         li.id AS listingId, li.mcNumber, li.legalName
+       FROM user_access_logs l
+       LEFT JOIN users u ON u.id = l.userId
+       LEFT JOIN listings li
+         ON li.id = SUBSTRING_INDEX(SUBSTRING(l.detail, 9), ' ', 1)
+       WHERE l.event = 'UNLOCK' AND l.createdAt >= :since
+       ORDER BY l.createdAt DESC
+       LIMIT 1000`,
+      { replacements: { since }, type: QueryTypes.SELECT }
+    );
+
     return {
       windowHours: hours,
       since,
+      unlocks: unlockRows.map((r) => ({
+        createdAt: r.createdAt,
+        ipAddress: r.ipAddress,
+        userAgent: r.userAgent,
+        reAccess: !!r.detail?.includes('(re-access)'),
+        user: { id: r.userId, name: r.userName, email: r.userEmail },
+        listing: r.listingId ? { id: r.listingId, mcNumber: r.mcNumber, legalName: r.legalName } : null,
+      })),
       clients: rows.map((r) => ({
         block: blockState(r.ipAddress),
         ...r,
