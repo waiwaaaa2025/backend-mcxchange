@@ -27,6 +27,7 @@ import {
   ProcessedWebhookEvent,
   CreditTransaction,
   CreditTransactionType,
+  UserRole,
 } from '../models';
 import { SUBSCRIPTION_PLANS } from '../types';
 import logger, { logError } from '../utils/logger';
@@ -1218,13 +1219,17 @@ async function handleIdentityVerified(session: any): Promise<void> {
     newTrustScore,
   });
 
+  const isSeller = user.role === UserRole.SELLER;
+
   // Send notification
   await notificationService.create({
     userId,
     type: NotificationType.VERIFICATION,
     title: 'Identity Verified',
-    message: 'Your identity has been verified. You can now continue with your business purchase.',
-    link: '/buyer/transactions',
+    message: isSeller
+      ? 'Your identity has been verified. You can now accept offers and complete your sale.'
+      : 'Your identity has been verified. You can now make offers and complete your purchase.',
+    link: isSeller ? '/seller/offers' : '/buyer/offers',
   });
 
   // Send email
@@ -1234,7 +1239,11 @@ async function handleIdentityVerified(session: any): Promise<void> {
     html: `
       <h2>Identity Verified</h2>
       <p>Hi ${user.name},</p>
-      <p>Your identity has been successfully verified on Domilea. You can now continue with your purchase: paying the deposit, approving the deal and completing the transfer.</p>
+      <p>Your identity has been successfully verified on Domilea. ${
+        isSeller
+          ? 'You can now accept offers and complete your sale.'
+          : 'You can now make offers and complete your purchase: paying the deposit, approving the deal and completing the transfer.'
+      }</p>
       <p>Thank you for helping us maintain a safe and trustworthy marketplace.</p>
     `,
   });

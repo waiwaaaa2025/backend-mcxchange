@@ -46,9 +46,7 @@ router.post('/admin/create', adminOnly, validate(adminCreateTransactionValidatio
 router.get('/', getMyTransactions);
 router.get('/:id', getTransaction);
 
-// Buyer actions — buying the business (after the seller accepted the offer)
-// requires a verified identity. These, plus the offer deposit checkout, are the
-// only places identity verification is enforced.
+// Buyer actions — buying the business requires a verified identity.
 router.post('/:id/buyer/accept-terms', requireIdentityVerification, buyerAcceptTerms);
 router.post('/:id/buyer/approve', requireIdentityVerification, buyerApprove);
 router.post('/:id/deposit', requireIdentityVerification, validate(paymentValidation), payDeposit);
@@ -57,9 +55,10 @@ router.post('/:id/verify-deposit-status', verifyDepositStatus);
 router.post('/:id/final-payment', requireIdentityVerification, validate(paymentValidation), payFinal);
 router.post('/:id/final-payment-checkout', requireIdentityVerification, createFinalPaymentCheckout);
 
-// Seller actions
-router.post('/:id/seller/accept-terms', sellerAcceptTerms);
-router.post('/:id/seller/approve', sellerApprove);
+// Seller actions — the seller must be verified to commit to the sale (admins
+// often accept offers on the seller's behalf, so this is the seller's first step).
+router.post('/:id/seller/accept-terms', requireIdentityVerification, sellerAcceptTerms);
+router.post('/:id/seller/approve', requireIdentityVerification, sellerApprove);
 
 // Both parties
 router.post('/:id/cancel', cancelTransaction);

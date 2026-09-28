@@ -520,10 +520,11 @@ export const requireLeadGeneratorBroker = async (
   }
 };
 
-// Require a verified identity (Stripe Identity). Only used on the buyer's purchase
-// steps after a seller accepts their offer — deposit, terms, approval and final
-// payment (offerRoutes, transactionRoutes). Browsing, unlocking, offers, messages,
-// subscriptions and tools never require it.
+// Require a verified identity (Stripe Identity). Used where a party commits to a
+// deal: buyers making/accepting offers and every purchase step; sellers accepting
+// or countering offers and accepting/approving the transaction (offerRoutes,
+// transactionRoutes). Browsing, unlocking, messages, subscriptions and tools never
+// require it.
 export const requireIdentityVerification = async (
   req: AuthRequest,
   res: Response,
@@ -547,7 +548,7 @@ export const requireIdentityVerification = async (
     if (!req.user.identityVerified) {
       res.status(403).json({
         success: false,
-        error: 'Verify your identity to continue with this purchase.',
+        error: 'Verify your identity to continue with this deal.',
         code: 'IDENTITY_VERIFICATION_REQUIRED',
       });
       return;
