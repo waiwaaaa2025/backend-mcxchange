@@ -805,5 +805,61 @@ class ChameleonIntelService {
   }
 }
 
+/** MC docket → USDOT number, from the census (MC is docket1 on almost every carrier). */
+export async function resolveMcToDot(mc: string): Promise<string | null> {
+  const num = digits(mc).replace(/^0+/, '');
+  if (!num) return null;
+  const rows = await socrata<any>(CENSUS, {
+    $select: 'dot_number',
+    $where: `(docket1prefix='MC' AND docket1 in (${q(num)}, ${q(num.padStart(6, '0'))})) OR (docket2prefix='MC' AND docket2=${q(num)}) OR (docket3prefix='MC' AND docket3=${q(num)})`,
+    $limit: '1',
+  });
+  return rows?.[0]?.dot_number ? String(parseInt(rows[0].dot_number, 10)) : null;
+}
+
+/**
+ * The same intel, cut down to what an LLM needs to explain it — the full
+ * payload for a carrier sharing trucks with ~100 DOTs would blow the agent's
+ * tool-result budget and get truncated mid-JSON.
+ */
+export function summarizeIntelForAgent(intel: ChameleonIntel) {
+  return {
+    dotNumber: intel.dotNumber,
+    legalName: intel.current.legalName,
+    score: intel.score,
+    riskLevel: intel.riskLevel,
+    flags: intel.flags.map((f) => ({ severity: f.severity, title: f.title, detail: f.detail.slice(0, 400) })),
+    current: {
+      phone: intel.current.phone,
+      cellPhone: intel.current.cellPhone,
+      email: intel.current.email,
+      officers: intel.current.officers,
+      address: intel.current.physicalAddress,
+      dotRegistered: intel.current.addDate,
+      lastMcs150: intel.current.mcs150Date,
+      priorRevokeDot: intel.current.priorRevokeDot,
+    },
+    linkedCarriers: {
+      total: intel.linkedCarriers.length,
+      top: intel.linkedCarriers.slice(0, 15).map((lc) => ({
+        dotNumber: lc.dotNumber,
+        legalName: lc.legalName,
+        status: lc.status,
+        location: lc.location,
+        powerUnits: lc.powerUnits,
+        linkedBy: lc.reasons,
+        matchDetail: lc.matchDetail,
+        sharedTrucks: lc.sharedVins.filter((v) => v.unitType === 'power_unit').length,
+        sharedTrailers: lc.sharedVins.filter((v) => v.unitType === 'trailer').length,
+        equipmentDirection: [...new Set(lc.sharedVins.map((v) => v.relation))],
+        sampleVins: lc.sharedVins.slice(0, 3).map((v) => `${v.vin} (${v.unitType === 'power_unit' ? 'truck' : 'trailer'}, them ${v.theirFirstSeen}→${v.theirLastSeen}, this carrier ${v.ourFirstSeen}→${v.ourLastSeen})`),
+      })),
+    },
+    identityChanges: intel.identityChanges.slice(0, 10),
+    equipmentChecked: intel.equipment,
+    incomplete: intel.sourcesFailed.length > 0,
+  };
+}
+
 export const chameleonIntelService = new ChameleonIntelService();
 export default chameleonIntelService;

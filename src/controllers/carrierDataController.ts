@@ -5,6 +5,7 @@ import { asyncHandler } from '../middleware/errorHandler';
 import { AuthRequest } from '../types';
 import { stripVins } from '../utils/listingSanitize';
 import { chameleonIntelService } from '../services/chameleonIntelService';
+import { hasCarrierPulseAccess } from '../utils/carrierPulseAccess';
 
 export const getCarrierReport = asyncHandler(async (req: AuthRequest, res: Response) => {
   const dotNumber = req.params.dotNumber as string;
@@ -47,6 +48,11 @@ export const getChameleonIntel = asyncHandler(async (req: AuthRequest, res: Resp
 
   if (!dotNumber || isNaN(Number(dotNumber))) {
     return res.status(400).json({ success: false, error: 'Valid DOT number is required' });
+  }
+
+  // Paid feature — the page paywalls, but the API has to as well.
+  if (!req.user || !(await hasCarrierPulseAccess(req.user.id, req.user.role))) {
+    return res.status(403).json({ success: false, error: 'Chameleon Check requires CarrierPulse access.', code: 'CARRIER_PULSE_REQUIRED' });
   }
 
   const intel = await chameleonIntelService.getIntel(dotNumber);
