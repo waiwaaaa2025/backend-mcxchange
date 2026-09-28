@@ -15,7 +15,7 @@ import {
   getListingCarrierIntel,
   createListingValidation,
 } from '../controllers/listingController';
-import { authenticate, optionalAuth, sellerOnly, buyerOnly, requireEnterpriseSubscription, requireActiveBilling } from '../middleware/auth';
+import { authenticate, optionalAuth, sellerOnly, buyerOnly, requireEnterpriseSubscription, requireActiveBilling, requireIdentityVerification } from '../middleware/auth';
 import { fmcsaLimiter, listingBrowseLimiter } from '../middleware/rateLimiter';
 import validate from '../middleware/validate';
 
@@ -51,6 +51,7 @@ router.post('/:id/save', authenticate, saveListing);
 router.delete('/:id/save', authenticate, unsaveListing);
 
 // Unlock listing (buyer uses credit) — blocked while billing is delinquent.
-router.post('/:id/unlock', authenticate, buyerOnly, requireActiveBilling, unlockListing);
+// Buyers must verify their identity (Stripe Identity) before unlocking a listing.
+router.post('/:id/unlock', authenticate, buyerOnly, requireIdentityVerification, requireActiveBilling, unlockListing);
 
 export default router;

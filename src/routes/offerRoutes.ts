@@ -23,8 +23,8 @@ const router = Router();
 router.use(authenticate);
 
 // Identity verification (Stripe Identity) is required for buyers to make or
-// accept an offer and pay the deposit, and for sellers to accept or counter one.
-// Browsing, unlocking, withdrawing and declining stay open.
+// accept an offer and pay the deposit (they already verified to unlock the
+// listing), and for sellers to accept or counter one.
 
 // Buyer routes
 router.post('/', buyerOnly, requireIdentityVerification, validate(createOfferValidation), createOffer);

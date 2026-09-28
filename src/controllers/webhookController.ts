@@ -1228,8 +1228,8 @@ async function handleIdentityVerified(session: any): Promise<void> {
     title: 'Identity Verified',
     message: isSeller
       ? 'Your identity has been verified. You can now accept offers and complete your sale.'
-      : 'Your identity has been verified. You can now make offers and complete your purchase.',
-    link: isSeller ? '/seller/offers' : '/buyer/offers',
+      : 'Your identity has been verified. You can now unlock listings, make offers and complete your purchase.',
+    link: isSeller ? '/seller/offers' : '/marketplace',
   });
 
   // Send email
@@ -1242,7 +1242,7 @@ async function handleIdentityVerified(session: any): Promise<void> {
       <p>Your identity has been successfully verified on Domilea. ${
         isSeller
           ? 'You can now accept offers and complete your sale.'
-          : 'You can now make offers and complete your purchase: paying the deposit, approving the deal and completing the transfer.'
+          : 'You can now unlock listings, make offers and complete your purchase: paying the deposit, approving the deal and completing the transfer.'
       }</p>
       <p>Thank you for helping us maintain a safe and trustworthy marketplace.</p>
     `,

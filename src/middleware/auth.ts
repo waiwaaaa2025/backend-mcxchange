@@ -521,10 +521,10 @@ export const requireLeadGeneratorBroker = async (
 };
 
 // Require a verified identity (Stripe Identity). Used where a party commits to a
-// deal: buyers making/accepting offers and every purchase step; sellers accepting
-// or countering offers and accepting/approving the transaction (offerRoutes,
-// transactionRoutes). Browsing, unlocking, messages, subscriptions and tools never
-// require it.
+// deal: buyers unlocking listings, making/accepting offers and every purchase
+// step; sellers accepting or countering offers and accepting/approving the
+// transaction (listingRoutes, offerRoutes, transactionRoutes). Browsing, messages,
+// subscriptions and tools never require it.
 export const requireIdentityVerification = async (
   req: AuthRequest,
   res: Response,
