@@ -1,6 +1,22 @@
 import { Op } from 'sequelize';
-import { Listing, Offer, SavedListing, Subscription, User, ListingStatus, ListingVisibility, OfferStatus } from '../../../models';
+import { Listing, Offer, SavedListing, Subscription, User, UnlockedListing, ListingStatus, ListingVisibility, OfferStatus } from '../../../models';
+import { sanitizeListing } from '../../../utils/listingSanitize';
 import type { ToolDef } from '../../core/types';
+
+// Listings reach buyers through Eva the same way as through the listings API:
+// MC/DOT, legal name and identifying title text stay masked until unlocked.
+async function maskUnlessUnlocked(listings: any[], userId: string | null): Promise<any[]> {
+  const ids = listings.map((l) => l?.id).filter(Boolean);
+  const unlocked = userId && ids.length
+    ? new Set((await UnlockedListing.findAll({ where: { userId, listingId: ids }, attributes: ['listingId'] })).map((u) => u.listingId))
+    : new Set<string>();
+  return listings.map((l) => {
+    if (!l) return l;
+    if (unlocked.has(l.id)) return l.toJSON ? l.toJSON() : l;
+    const { legalName, dbaName, ...safe } = sanitizeListing(l);
+    return safe;
+  });
+}
 
 export function buildBuyerTools(): ToolDef[] {
   return [
@@ -26,7 +42,7 @@ export function buildBuyerTools(): ToolDef[] {
           },
         },
       },
-      handler: async (args: any) => {
+      handler: async (args: any, ctx) => {
         const where: any = {
           status: ListingStatus.ACTIVE,
           visibility: ListingVisibility.PUBLIC,
@@ -37,23 +53,19 @@ export function buildBuyerTools(): ToolDef[] {
         if (args.minFleet != null) where.fleetSize = { [Op.gte]: args.minFleet };
         if (args.maxFleet != null) where.fleetSize = { ...(where.fleetSize || {}), [Op.lte]: args.maxFleet };
         if (args.minYearsActive != null) where.yearsActive = { [Op.gte]: args.minYearsActive };
-        if (args.query) {
-          where[Op.or] = [
-            { title: { [Op.like]: `%${args.query}%` } },
-            { legalName: { [Op.like]: `%${args.query}%` } },
-          ];
-        }
+        // Title only — matching the hidden legal name would confirm which carrier a listing is.
+        if (args.query) where.title = { [Op.like]: `%${args.query}%` };
         const limit = Math.min(100, Math.max(1, args.limit || 25));
         const { rows, count } = await Listing.findAndCountAll({
           where,
           limit,
           order: [['createdAt', 'DESC']],
           attributes: [
-            'id', 'title', 'mcNumber', 'askingPrice', 'state', 'city', 'fleetSize',
+            'id', 'title', 'mcNumber', 'dotNumber', 'legalName', 'dbaName', 'askingPrice', 'state', 'city', 'fleetSize',
             'totalDrivers', 'safetyRating', 'yearsActive', 'isPremium', 'createdAt',
           ],
         });
-        return { total: count, returned: rows.length, listings: rows };
+        return { total: count, returned: rows.length, listings: await maskUnlessUnlocked(rows, ctx.userId) };
       },
     },
 
@@ -80,10 +92,11 @@ export function buildBuyerTools(): ToolDef[] {
           include: [{
             model: Listing,
             as: 'listing',
-            attributes: ['id', 'title', 'mcNumber', 'askingPrice', 'state', 'city', 'fleetSize', 'status'],
+            attributes: ['id', 'title', 'mcNumber', 'dotNumber', 'legalName', 'dbaName', 'askingPrice', 'state', 'city', 'fleetSize', 'status'],
           }],
         });
-        return { count: rows.length, saved: rows };
+        const listings = await maskUnlessUnlocked(rows.map((r: any) => r.listing), ctx.userId);
+        return { count: rows.length, saved: rows.map((r: any, i) => ({ savedAt: r.createdAt, listing: listings[i] })) };
       },
     },
 
@@ -112,9 +125,13 @@ export function buildBuyerTools(): ToolDef[] {
           where,
           order: [['createdAt', 'DESC']],
           limit,
-          include: [{ model: Listing, as: 'listing', attributes: ['id', 'title', 'mcNumber', 'askingPrice'] }],
+          include: [{ model: Listing, as: 'listing', attributes: ['id', 'title', 'mcNumber', 'dotNumber', 'legalName', 'dbaName', 'askingPrice', 'state'] }],
         });
-        return { count: rows.length, offers: rows };
+        const listings = await maskUnlessUnlocked(rows.map((r: any) => r.listing), ctx.userId);
+        return {
+          count: rows.length,
+          offers: rows.map((r: any, i) => ({ ...r.toJSON(), listing: listings[i] })),
+        };
       },
     },
 
