@@ -22,14 +22,14 @@ const router = Router();
 // All offer routes require authentication
 router.use(authenticate);
 
-// Identity verification (Stripe Identity) is required for buyers to make or
-// accept an offer and pay the deposit (they already verified to unlock the
-// listing), and for sellers to accept or counter one.
+// Identity verification (Stripe Identity) is required for buyers to pay the
+// deposit (they already verified to unlock the listing), and for sellers to
+// accept or counter an offer. Making an offer doesn't require it.
 
 // Buyer routes
-router.post('/', buyerOnly, requireIdentityVerification, validate(createOfferValidation), createOffer);
+router.post('/', buyerOnly, validate(createOfferValidation), createOffer);
 router.get('/my-offers', buyerOnly, getBuyerOffers);
-router.post('/:id/accept-counter', buyerOnly, requireIdentityVerification, acceptCounterOffer);
+router.post('/:id/accept-counter', buyerOnly, acceptCounterOffer);
 router.post('/:id/withdraw', buyerOnly, withdrawOffer);
 router.post('/:id/deposit-checkout', buyerOnly, requireIdentityVerification, createDepositCheckout);
 
