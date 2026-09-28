@@ -2953,6 +2953,53 @@ BlockedIp.init(
   }
 );
 
+// ==================== CARRIER IDENTITY OBSERVATION MODEL ====================
+// FMCSA publishes only a carrier's CURRENT phone/email/officers, never their
+// history. Every Chameleon Check records what the census showed that day (a new
+// row only when something differs from the last one), so later checks can say
+// "phone changed from X to Y around <date>" — the ownership-change tell.
+
+export class CarrierIdentityObservation extends Model {
+  declare id: string;
+  declare dotNumber: string;
+  declare legalName?: string | null;
+  declare dbaName?: string | null;
+  declare phone?: string | null;
+  declare cellPhone?: string | null;
+  declare fax?: string | null;
+  declare email?: string | null;
+  declare officer1?: string | null;
+  declare officer2?: string | null;
+  declare physicalAddress?: string | null;
+  declare mailingAddress?: string | null;
+  declare mcs150Date?: string | null;
+  declare readonly createdAt: Date;
+}
+
+CarrierIdentityObservation.init(
+  {
+    id: { type: DataTypes.UUID, defaultValue: DataTypes.UUIDV4, primaryKey: true },
+    dotNumber: { type: DataTypes.STRING(12), allowNull: false },
+    legalName: { type: DataTypes.STRING(255), allowNull: true },
+    dbaName: { type: DataTypes.STRING(255), allowNull: true },
+    phone: { type: DataTypes.STRING(32), allowNull: true },
+    cellPhone: { type: DataTypes.STRING(32), allowNull: true },
+    fax: { type: DataTypes.STRING(32), allowNull: true },
+    email: { type: DataTypes.STRING(255), allowNull: true },
+    officer1: { type: DataTypes.STRING(255), allowNull: true },
+    officer2: { type: DataTypes.STRING(255), allowNull: true },
+    physicalAddress: { type: DataTypes.STRING(500), allowNull: true },
+    mailingAddress: { type: DataTypes.STRING(500), allowNull: true },
+    mcs150Date: { type: DataTypes.STRING(16), allowNull: true },
+  },
+  {
+    sequelize,
+    tableName: 'carrier_identity_observations',
+    updatedAt: false,
+    indexes: [{ fields: ['dotNumber', 'createdAt'] }],
+  }
+);
+
 // ==================== PDF PURCHASE MODEL ====================
 // Tracks one-time PDF / bundle purchases via Stripe Payment Links
 
