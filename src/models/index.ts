@@ -1,5 +1,6 @@
 import { DataTypes, Model, Optional } from 'sequelize';
 import sequelize from '../config/database';
+import { config } from '../config';
 
 // ==================== ENUMS ====================
 
@@ -3357,7 +3358,21 @@ TruckPhoto.init(
       primaryKey: true,
     },
     truckId: { type: DataTypes.UUID, allowNull: false },
-    url: { type: DataTypes.STRING(1000), allowNull: false },
+    url: {
+      type: DataTypes.STRING(1000),
+      allowNull: false,
+      // The S3 bucket is private, so a stored S3 URL 403s in the browser.
+      // Hand out our own /api/truck-photos/<key> link instead, which
+      // redirects to a short-lived signed URL.
+      get(this: TruckPhoto) {
+        const raw = this.getDataValue('url') as string;
+        const prefix = `https://${config.upload.s3.bucket}.s3.${config.upload.s3.region}.amazonaws.com/trucks/`;
+        if (raw && config.upload.s3.enabled && raw.startsWith(prefix)) {
+          return `${config.apiUrl}/api/truck-photos/${raw.slice(prefix.length)}`;
+        }
+        return raw;
+      },
+    },
     filename: { type: DataTypes.STRING(255), allowNull: true },
     displayOrder: {
       type: DataTypes.INTEGER,
