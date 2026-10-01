@@ -467,16 +467,10 @@ export const getUnlockedListings = asyncHandler(async (req: AuthRequest, res: Re
 
   const result = await listingService.getUnlockedListings(req.user.id, page, limit);
 
-  // An unlock buys the details of a listing for sale; it does not survive the
-  // sale unless this buyer is the one who bought it.
-  const data = await maskBuyerListingRows(
-    result.listings.map(({ unlockedAt, ...listing }: any) => ({ listing, extra: { unlockedAt }, unlocked: true })),
-    { userId: req.user.id, role: req.user.role }
-  );
-
+  // Sold and taken-down listings are already excluded by the query.
   res.json({
     success: true,
-    data,
+    data: result.listings,
     pagination: result.pagination,
   });
 });

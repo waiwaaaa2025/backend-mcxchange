@@ -1,4 +1,5 @@
-import { Listing, UnlockedListing, UserRole } from '../../../models';
+import { Op } from 'sequelize';
+import { Listing, ListingStatus, UnlockedListing, UserRole } from '../../../models';
 import { chameleonIntelService, resolveMcToDot, summarizeIntelForAgent } from '../../../services/chameleonIntelService';
 import { hasCarrierPulseAccess } from '../../../utils/carrierPulseAccess';
 import type { AgentContext, ToolDef } from '../../core/types';
@@ -102,6 +103,9 @@ export function buildUnlockedListingsTool(): ToolDef {
         include: [{
           model: Listing,
           as: 'listing',
+          // Sold or taken-down listings drop off the unlocked list.
+          required: true,
+          where: { status: { [Op.in]: [ListingStatus.ACTIVE, ListingStatus.RESERVED] } },
           attributes: ['id', 'title', 'mcNumber', 'dotNumber', 'askingPrice', 'state', 'status'],
         }],
       });

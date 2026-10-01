@@ -19,6 +19,7 @@ import {
   PremiumRequest,
   PremiumRequestStatus,
   UserTermsAcceptance,
+  ListingStatus,
 } from '../models';
 import { getPaginationInfo } from '../utils/helpers';
 import { stripeService } from './stripeService';
@@ -221,9 +222,12 @@ class BuyerService {
       order: [['createdAt', 'DESC']],
       offset,
       limit,
+      // Sold or taken-down listings drop off the unlocked list (see listingService).
       include: [{
         model: Listing,
         as: 'listing',
+        required: true,
+        where: { status: { [Op.in]: [ListingStatus.ACTIVE, ListingStatus.RESERVED] } },
         include: [
           {
             model: User,

@@ -705,9 +705,15 @@ class ListingService {
       offset,
       limit,
       order: [['createdAt', 'DESC']],
+      // Only listings still on the market. Once one sells or is taken down
+      // (rejected, suspended, back to draft, deleted) it drops off the buyer's
+      // unlocked list — the unlock bought a look at a listing for sale, not a
+      // permanent record of which MC it was.
       include: [{
         model: Listing,
         as: 'listing',
+        required: true,
+        where: { status: { [Op.in]: [ListingStatus.ACTIVE, ListingStatus.RESERVED] } },
         include: [{
           model: User,
           as: 'seller',
