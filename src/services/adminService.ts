@@ -50,6 +50,22 @@ import { stripeService, SUBSCRIPTION_PRICE_IDS } from './stripeService';
 import { buyerPreferencesService, BuyerPreferencesInput } from './buyerPreferencesService';
 import { rankListings, hasAnyCriteria } from './matchService';
 
+
+// Stripe prices no longer in SUBSCRIPTION_PRICE_IDS that existing subscriptions
+// still sit on. Analytics-only (see getSubscriptionAnalytics).
+const LEGACY_PRICE_PLANS: Record<string, { plan: string; interval: 'monthly' | 'yearly' }> = {
+  // Lead Generator Broker: the original $499 price, then two custom deals.
+  price_1Tc818FnDj2YhGIWVf8Pbtop: { plan: 'lead_generator_broker', interval: 'monthly' }, // original $499
+  price_1UIwd1FnDj2YhGIWsMxOQk6X: { plan: 'lead_generator_broker', interval: 'monthly' }, // "full lead generator" $700
+  price_1UL7GgFnDj2YhGIWmqzfs78v: { plan: 'lead_generator_broker', interval: 'monthly' }, // "Insurance lead generator" $1,000
+  // CheckMyCDL — a separate product billed through the same Stripe account.
+  price_1TUvSAFnDj2YhGIWFaCRboL4: { plan: 'checkmycdl', interval: 'monthly' }, // Starter $59
+  price_1TUvUXFnDj2YhGIWNCsyAbko: { plan: 'checkmycdl', interval: 'monthly' }, // Pro $89
+};
+
+// Plans that aren't Domilea revenue: listed in the mix, left out of MRR.
+const EXTERNAL_PLANS = new Set(['checkmycdl']);
+
 class AdminService {
   // Get dashboard stats (cached for 5 minutes to reduce query load)
   async getDashboardStats() {
@@ -3429,6 +3445,11 @@ class AdminService {
       if (p.monthly) priceIdToPlan.set(p.monthly, { plan, interval: 'monthly' });
       if (p.yearly) priceIdToPlan.set(p.yearly, { plan, interval: 'yearly' });
     }
+    // Retired and custom-negotiated prices still on Stripe subscriptions. Kept
+    // here, not in SUBSCRIPTION_PRICE_IDS, because that map picks checkout prices.
+    for (const [priceId, mapped] of Object.entries(LEGACY_PRICE_PLANS)) {
+      if (!priceIdToPlan.has(priceId)) priceIdToPlan.set(priceId, mapped);
+    }
 
     const subs = await stripeService.listAllSubscriptions('all');
 
@@ -3438,10 +3459,12 @@ class AdminService {
       status: string;
       count: number;
       mrr: number; // in cents, normalized to monthly
+      external?: boolean; // another business on the same Stripe account
     };
     const bucketMap = new Map<string, Bucket>();
     const totals: Record<string, number> = {};
     let mrrTotalCents = 0;
+    let externalMrrCents = 0;
     const unmappedPriceIds = new Map<string, number>();
 
     for (const sub of subs) {
@@ -3453,6 +3476,7 @@ class AdminService {
 
       const mapped = priceIdToPlan.get(priceId);
       const plan = mapped?.plan || 'unknown';
+      const external = EXTERNAL_PLANS.has(plan);
       const interval = mapped?.interval || 'unknown';
 
       if (!mapped) {
@@ -3477,11 +3501,13 @@ class AdminService {
           status: sub.status,
           count: 1,
           mrr: sub.status === 'active' || sub.status === 'trialing' ? itemMrr : 0,
+          ...(external && { external: true }),
         });
       }
 
       if (sub.status === 'active' || sub.status === 'trialing') {
-        mrrTotalCents += itemMrr;
+        if (external) externalMrrCents += itemMrr;
+        else mrrTotalCents += itemMrr;
       }
     }
 
@@ -3515,6 +3541,7 @@ class AdminService {
       totalSubscriptions: subs.length,
       mrrCents: mrrTotalCents,
       mrrDollars: mrrTotalCents / 100,
+      externalMrrDollars: externalMrrCents / 100,
       unmappedPriceIds: unmappedEntries,
     };
   }
