@@ -1,3 +1,4 @@
+import { canViewSoldListing } from '../utils/listingVisibility';
 import { Response } from 'express';
 import { asyncHandler } from '../middleware/errorHandler';
 import { AuthRequest } from '../types';
@@ -28,7 +29,9 @@ const canSeeIdentity = async (req: AuthRequest, listing: { id: string; sellerId:
 
 // Listings whose equipment pages are public. Anything else (draft, pending,
 // rejected, suspended) is visible to the seller and admins only.
-const PUBLIC_STATUSES: string[] = [ListingStatus.ACTIVE, ListingStatus.RESERVED, ListingStatus.SOLD];
+// SOLD is deliberately absent: a sold listing's trucks (photos, make/model/year)
+// are only for the parties to the deal — see canViewSoldListing.
+const PUBLIC_STATUSES: string[] = [ListingStatus.ACTIVE, ListingStatus.RESERVED];
 
 /**
  * One piece of equipment (truck or trailer) with its photos, a masked summary
@@ -76,7 +79,11 @@ export const getEquipment = asyncHandler(async (req: AuthRequest, res: Response)
 
   const entitled = await canSeeIdentity(req, listing);
   const owner = isAdmin(req) || listing.sellerId === req.user?.id;
-  if (!owner && !PUBLIC_STATUSES.includes(listing.status)) throw new NotFoundError('Equipment');
+  if (!owner && !PUBLIC_STATUSES.includes(listing.status)
+    && !(listing.status === ListingStatus.SOLD
+      && await canViewSoldListing(listing, { userId: req.user?.id, role: req.user?.role }))) {
+    throw new NotFoundError('Equipment');
+  }
 
   const identity = {
     mcNumber: listing.mcNumber,
@@ -133,6 +140,11 @@ export const getEquipment = asyncHandler(async (req: AuthRequest, res: Response)
 
 export const listTrucks = asyncHandler(async (req: AuthRequest, res: Response) => {
   const listingId = req.params.listingId;
+  const parent = await Listing.findByPk(listingId, { attributes: ['id', 'sellerId', 'status'] });
+  if (parent?.status === ListingStatus.SOLD
+    && !(await canViewSoldListing(parent, { userId: req.user?.id, role: req.user?.role }))) {
+    throw new NotFoundError('Listing');
+  }
   const trucks = await truckService.listByListing(listingId);
 
   // VINs identify the carrier behind a masked listing — owner, admin and

@@ -11,7 +11,8 @@ import { recordAccess } from '../utils/accessLog';
 import { recordListingAccess } from '../utils/listingAccessLog';
 import { AUTHORITY_TYPE_VALUES, requiresDotNumber } from '../utils/authority';
 import { sanitizeListing, redactCarrierIntel } from '../utils/listingSanitize';
-import { Listing } from '../models';
+import { canViewSoldListing, soldListingStub, maskBuyerListingRows } from '../utils/listingVisibility';
+import { Listing, ListingStatus } from '../models';
 import { fmcsaService } from '../services/fmcsaService';
 import { carrierDataService } from '../services/carrierDataService';
 
@@ -99,7 +100,13 @@ export const getListings = asyncHandler(async (req: AuthRequest, res: Response) 
     hasPhone: parseBooleanParam(req.query.hasPhone as string),
     minYears: parseIntParam(req.query.minYears as string),
     sortBy: req.query.sortBy as ListingQueryParams['sortBy'],
-    status: req.query.status as string,
+    // Non-admins browse ACTIVE listings only. SOLD is answered with bare stubs
+    // below; drafts, pending and rejected listings are never public.
+    status: req.user?.role === UserRole.ADMIN
+      ? (req.query.status as string)
+      : String(req.query.status || '').toUpperCase() === ListingStatus.SOLD
+        ? ListingStatus.SOLD
+        : ListingStatus.ACTIVE,
     // Only admins may match MC/DOT/legal name by substring — for anyone else
     // that turns the search box into a way to read back the masked number.
     allowIdentitySubstringSearch: req.user?.role === UserRole.ADMIN,
@@ -109,6 +116,18 @@ export const getListings = asyncHandler(async (req: AuthRequest, res: Response) 
   const userId = req.user?.id;
   const isAdmin = req.user?.role === UserRole.ADMIN;
   const isSeller = req.user?.role === UserRole.SELLER;
+
+  // A sold MC is nobody's business but the parties'. The public "Recently Sold"
+  // strip gets state, authority type and sale month — nothing to look up.
+  if (!isAdmin && params.status === ListingStatus.SOLD) {
+    recordListingAccess(req, 'BROWSE', { userId, detail: `sold page=${params.page} limit=${params.limit}` });
+    res.json({
+      success: true,
+      data: result.listings.map((l: any) => soldListingStub(l.toJSON ? l.toJSON() : l)),
+      pagination: result.pagination,
+    });
+    return;
+  }
 
   // Withhold carrier identity from anyone who hasn't unlocked the listing.
   // Note the predicate is ownership, not the SELLER role: holding a seller
@@ -174,6 +193,12 @@ export const getListing = asyncHandler(async (req: AuthRequest, res: Response) =
   const isOwner = req.user && listing.sellerId === req.user.id;
   const isAdmin = req.user?.role === UserRole.ADMIN;
 
+  if (listing.status === ListingStatus.SOLD
+    && !(await canViewSoldListing(listing, { userId, role: req.user?.role }))) {
+    res.status(404).json({ success: false, error: 'Listing not found' });
+    return;
+  }
+
   if (!(await viewerMayAccessVip(req, listing))) {
     res.status(403).json({ success: false, error: 'Premium subscription required to view VIP listings.', code: 'PREMIUM_REQUIRED' });
     return;
@@ -205,9 +230,10 @@ export const getListingCarrierIntel = asyncHandler(async (req: AuthRequest, res:
   // Deliberately not listingService.getListingById — that increments `views`,
   // and this fires alongside every detail render.
   const listing = await Listing.findByPk(id, {
-    attributes: ['id', 'mcNumber', 'dotNumber', 'legalName', 'isVip', 'sellerId'],
+    attributes: ['id', 'mcNumber', 'dotNumber', 'legalName', 'isVip', 'sellerId', 'status'],
   });
-  if (!listing) {
+  if (!listing || (listing.status === ListingStatus.SOLD
+    && !(await canViewSoldListing(listing, { userId: req.user?.id, role: req.user?.role })))) {
     res.status(404).json({ success: false, error: 'Listing not found' });
     return;
   }
@@ -370,9 +396,25 @@ export const getSavedListings = asyncHandler(async (req: AuthRequest, res: Respo
 
   const result = await listingService.getSavedListings(req.user.id, page, limit);
 
+  // Saving a listing is free, so it must not hand back what unlocking sells —
+  // and nobody outside the deal gets a sold listing's details.
+  const listings = result.listings.filter(Boolean).map((l: any) => (l.toJSON ? l.toJSON() : l));
+  const unlockedIds = new Set(
+    (
+      await UnlockedListing.findAll({
+        where: { userId: req.user.id, listingId: listings.map((l: any) => l.id) },
+        attributes: ['listingId'],
+      })
+    ).map((u: any) => u.listingId)
+  );
+  const data = await maskBuyerListingRows(
+    listings.map((listing: any) => ({ listing, unlocked: unlockedIds.has(listing.id) })),
+    { userId: req.user.id, role: req.user.role }
+  );
+
   res.json({
     success: true,
-    data: result.listings,
+    data,
     pagination: result.pagination,
   });
 });
@@ -425,9 +467,16 @@ export const getUnlockedListings = asyncHandler(async (req: AuthRequest, res: Re
 
   const result = await listingService.getUnlockedListings(req.user.id, page, limit);
 
+  // An unlock buys the details of a listing for sale; it does not survive the
+  // sale unless this buyer is the one who bought it.
+  const data = await maskBuyerListingRows(
+    result.listings.map(({ unlockedAt, ...listing }: any) => ({ listing, extra: { unlockedAt }, unlocked: true })),
+    { userId: req.user.id, role: req.user.role }
+  );
+
   res.json({
     success: true,
-    data: result.listings,
+    data,
     pagination: result.pagination,
   });
 });
