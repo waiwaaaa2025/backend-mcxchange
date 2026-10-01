@@ -1,4 +1,5 @@
 import { config } from '../config';
+import { applyFmcsaSafetyFallback, FALLBACK_MARKER } from './fmcsaSafetyFallback';
 import {
   MorProCarrierReport,
   InsuranceLead,
@@ -291,10 +292,15 @@ class CarrierDataService {
       logger.info(`Carrier report cache HIT for DOT ${dotNumber} — serving instantly`);
       // LINQ-sourced entries (they keep raw snake_case fields) are re-normalized
       // on read, so ones cached before a normalizer fix pick it up too.
-      if (cached.carrier?.legal_name !== undefined) {
-        return normalizeLinqReport(cached);
+      const report = cached.carrier?.legal_name !== undefined ? normalizeLinqReport(cached) : cached;
+      // Entries cached before the FMCSA safety fallback existed get it once.
+      if ((report as any)[FALLBACK_MARKER] === undefined) {
+        await applyFmcsaSafetyFallback(report, dotNumber).catch(() => false);
+        if ((report as any)[FALLBACK_MARKER] !== undefined) {
+          await cacheService.cacheCarrierReport(dotNumber, report);
+        }
       }
-      return cached;
+      return report;
     }
 
     const startTime = Date.now();
@@ -323,6 +329,10 @@ class CarrierDataService {
 
       if (result.kind === 'ok') {
         if (up.name === 'linq') result.report = normalizeLinqReport(result.report);
+        // Provider has no inspections/violations (common for new authorities) → FMCSA.
+        await applyFmcsaSafetyFallback(result.report, dotNumber).catch((err) =>
+          logger.warn(`FMCSA safety fallback failed for DOT ${dotNumber}: ${(err as Error).message}`)
+        );
         await cacheService.cacheCarrierReport(dotNumber, result.report);
         logger.info(
           `Carrier report for DOT ${dotNumber} served by '${up.name}' in ${Date.now() - startTime}ms`
