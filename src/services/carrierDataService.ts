@@ -1,5 +1,6 @@
 import { config } from '../config';
 import { applyFmcsaSafetyFallback, FALLBACK_MARKER } from './fmcsaSafetyFallback';
+import { applyBasicPercentiles, PERCENTILE_MARKER } from './basicPercentileService';
 import {
   MorProCarrierReport,
   InsuranceLead,
@@ -281,6 +282,21 @@ class CarrierDataService {
    * status when both fail otherwise, so a rate-limit or outage is never masked
    * as a 404.
    */
+  /**
+   * FMCSA fills for what the provider lacks: inspections/BASIC violations when it
+   * has none (new authorities), and estimated BASIC percentiles, which no
+   * provider has for property carriers. Each is marked on the report so a
+   * cached copy is filled once; failures leave it unmarked to retry.
+   */
+  private async applyFmcsaSafetyData(report: any, dotNumber: string): Promise<void> {
+    await applyFmcsaSafetyFallback(report, dotNumber).catch((err) =>
+      logger.warn(`FMCSA safety fallback failed for DOT ${dotNumber}: ${(err as Error).message}`)
+    );
+    await applyBasicPercentiles(report, dotNumber).catch((err) =>
+      logger.warn(`BASIC percentile estimate failed for DOT ${dotNumber}: ${(err as Error).message}`)
+    );
+  }
+
   async getFullReport(dotNumber: string): Promise<MorProCarrierReport | null> {
     // 1. Check Redis cache
     const cached = await cacheService.getCachedCarrierReport<MorProCarrierReport>(dotNumber);
@@ -293,10 +309,11 @@ class CarrierDataService {
       // LINQ-sourced entries (they keep raw snake_case fields) are re-normalized
       // on read, so ones cached before a normalizer fix pick it up too.
       const report = cached.carrier?.legal_name !== undefined ? normalizeLinqReport(cached) : cached;
-      // Entries cached before the FMCSA safety fallback existed get it once.
-      if ((report as any)[FALLBACK_MARKER] === undefined) {
-        await applyFmcsaSafetyFallback(report, dotNumber).catch(() => false);
-        if ((report as any)[FALLBACK_MARKER] !== undefined) {
+      // Entries cached before the FMCSA fallbacks existed get them once.
+      const r = report as any;
+      if (r[FALLBACK_MARKER] === undefined || r[PERCENTILE_MARKER] === undefined) {
+        await this.applyFmcsaSafetyData(report, dotNumber);
+        if (r[FALLBACK_MARKER] !== undefined || r[PERCENTILE_MARKER] !== undefined) {
           await cacheService.cacheCarrierReport(dotNumber, report);
         }
       }
@@ -329,10 +346,7 @@ class CarrierDataService {
 
       if (result.kind === 'ok') {
         if (up.name === 'linq') result.report = normalizeLinqReport(result.report);
-        // Provider has no inspections/violations (common for new authorities) → FMCSA.
-        await applyFmcsaSafetyFallback(result.report, dotNumber).catch((err) =>
-          logger.warn(`FMCSA safety fallback failed for DOT ${dotNumber}: ${(err as Error).message}`)
-        );
+        await this.applyFmcsaSafetyData(result.report, dotNumber);
         await cacheService.cacheCarrierReport(dotNumber, result.report);
         logger.info(
           `Carrier report for DOT ${dotNumber} served by '${up.name}' in ${Date.now() - startTime}ms`
