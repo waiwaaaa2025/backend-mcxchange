@@ -210,7 +210,23 @@ class FMCSAService {
           brokerAuthorityStatus: 'N/A',
         };
 
-        for (const item of data.content) {
+        for (const entry of data.content) {
+          // QCMobile wraps each docket as { carrierAuthority: { commonAuthorityStatus: 'A', ... } }
+          // with flat per-type statuses — no authTypeCd.
+          const ca = entry?.carrierAuthority;
+          if (ca) {
+            // A=Active, I=Inactive, N=None. Any docket being active wins.
+            const word = (s: unknown) =>
+              ({ A: 'ACTIVE', I: 'INACTIVE', N: 'NONE' } as Record<string, string>)[String(s || '').toUpperCase()];
+            const merge = (cur: string, next: unknown) =>
+              cur === 'ACTIVE' ? cur : word(next) || cur;
+            result.commonAuthorityStatus = merge(result.commonAuthorityStatus, ca.commonAuthorityStatus);
+            result.contractAuthorityStatus = merge(result.contractAuthorityStatus, ca.contractAuthorityStatus);
+            result.brokerAuthorityStatus = merge(result.brokerAuthorityStatus, ca.brokerAuthorityStatus);
+            continue;
+          }
+
+          const item = entry;
           const type = String(item.authTypeCd || item.authorityType || '').toUpperCase();
           const status = item.authActCd || item.authStatus || item.status || 'N/A';
           const grantDate = item.authGrantDt || item.grantDate || item.grantDt;
