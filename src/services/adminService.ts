@@ -928,6 +928,10 @@ class AdminService {
     highwaySetup?: boolean;
     sellingWithEmail?: boolean;
     sellingWithPhone?: boolean;
+    rmisSetup?: boolean;
+    hasFactoring?: boolean | string;
+    factoringCompany?: string | null;
+    factoringRate?: number | null;
     contactEmail?: string;
     contactPhone?: string;
     cargoTypes?: string[];
@@ -998,6 +1002,10 @@ class AdminService {
     if (data.highwaySetup !== undefined) updateData.highwaySetup = data.highwaySetup;
     if (data.sellingWithEmail !== undefined) updateData.sellingWithEmail = data.sellingWithEmail;
     if (data.sellingWithPhone !== undefined) updateData.sellingWithPhone = data.sellingWithPhone;
+    if (data.rmisSetup !== undefined) updateData.rmisSetup = data.rmisSetup;
+    if (data.hasFactoring !== undefined) updateData.hasFactoring = data.hasFactoring === true || data.hasFactoring === 'yes';
+    if (data.factoringCompany !== undefined) updateData.factoringCompany = data.factoringCompany;
+    if (data.factoringRate !== undefined) updateData.factoringRate = data.factoringRate;
     if (data.authorityType !== undefined) updateData.authorityType = normalizeAuthorityType(data.authorityType);
     if (data.contactEmail !== undefined) updateData.contactEmail = data.contactEmail;
     if (data.contactPhone !== undefined) updateData.contactPhone = data.contactPhone;
@@ -2220,8 +2228,10 @@ class AdminService {
     isPremium?: boolean;
     isVip?: boolean;
     visibility?: string;
-    hasFactoring?: string;
+    hasFactoring?: string | boolean;
     factoringCompany?: string;
+    factoringRate?: number;
+    rmisSetup?: boolean;
     entryAuditCompleted?: string;
     status?: string;
     createdByAdminId: string;
@@ -2277,6 +2287,10 @@ class AdminService {
       highwaySetup: data.highwaySetup || false,
       sellingWithEmail: data.sellingWithEmail || false,
       sellingWithPhone: data.sellingWithPhone || false,
+      rmisSetup: data.rmisSetup || false,
+      hasFactoring: data.hasFactoring === true || data.hasFactoring === 'yes',
+      factoringCompany: data.factoringCompany || undefined,
+      factoringRate: data.factoringRate || undefined,
       cargoTypes: data.cargoTypes ? JSON.stringify(data.cargoTypes) : '[]',
       isPremium: data.isPremium || false,
       isVip: data.isVip || false,
