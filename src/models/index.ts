@@ -2626,6 +2626,70 @@ AccountDispute.init(
   }
 );
 
+// ==================== CONTENT REPORT MODEL ====================
+// A user flagging an MC listing or equipment item for admin review.
+// status/targetType are plain strings (not ENUMs) so new values never need
+// a manual ALTER on prod — sync() doesn't widen ENUM columns.
+
+export const ContentReportStatus = {
+  OPEN: 'OPEN',
+  DISMISSED: 'DISMISSED',
+  ACTIONED: 'ACTIONED',
+} as const;
+
+export const ContentReportTarget = {
+  LISTING: 'LISTING',
+  EQUIPMENT: 'EQUIPMENT',
+} as const;
+
+export class ContentReport extends Model {
+  declare id: string;
+  declare reporterId: string;
+  declare targetType: string;
+  declare targetId: string;
+  declare reportedUserId: string | null;
+  declare reason: string;
+  declare details: string | null;
+  declare status: string;
+  declare resolution: string | null;
+  declare adminNotes: string | null;
+  declare resolvedBy: string | null;
+  declare resolvedAt: Date | null;
+  declare readonly createdAt: Date;
+  declare readonly updatedAt: Date;
+
+  declare readonly reporter?: User;
+  declare readonly reportedUser?: User;
+  declare readonly resolver?: User;
+}
+
+ContentReport.init(
+  {
+    id: { type: DataTypes.UUID, defaultValue: DataTypes.UUIDV4, primaryKey: true },
+    reporterId: { type: DataTypes.UUID, allowNull: false },
+    targetType: { type: DataTypes.STRING(20), allowNull: false },
+    targetId: { type: DataTypes.UUID, allowNull: false },
+    reportedUserId: { type: DataTypes.UUID, allowNull: true },
+    reason: { type: DataTypes.STRING(50), allowNull: false },
+    details: { type: DataTypes.TEXT, allowNull: true },
+    status: { type: DataTypes.STRING(20), allowNull: false, defaultValue: ContentReportStatus.OPEN },
+    resolution: { type: DataTypes.STRING(30), allowNull: true },
+    adminNotes: { type: DataTypes.TEXT, allowNull: true },
+    resolvedBy: { type: DataTypes.UUID, allowNull: true },
+    resolvedAt: { type: DataTypes.DATE, allowNull: true },
+  },
+  {
+    sequelize,
+    tableName: 'content_reports',
+    indexes: [
+      { fields: ['status', 'createdAt'] },
+      { fields: ['targetType', 'targetId'] },
+      { fields: ['reporterId'] },
+      { fields: ['reportedUserId'] },
+    ],
+  }
+);
+
 // ==================== USER TERMS ACCEPTANCE MODEL ====================
 // Tracks when users accept the Terms of Service - required for premium requests
 
@@ -4267,6 +4331,11 @@ AccountDispute.belongsTo(User, { foreignKey: 'userId', as: 'user' });
 AccountDispute.belongsTo(User, { foreignKey: 'resolvedBy', as: 'resolver' });
 User.hasMany(AccountDispute, { foreignKey: 'userId', as: 'accountDisputes' });
 
+// ContentReport associations
+ContentReport.belongsTo(User, { foreignKey: 'reporterId', as: 'reporter' });
+ContentReport.belongsTo(User, { foreignKey: 'reportedUserId', as: 'reportedUser' });
+ContentReport.belongsTo(User, { foreignKey: 'resolvedBy', as: 'resolver' });
+
 // UserTermsAcceptance associations
 UserTermsAcceptance.belongsTo(User, { foreignKey: 'userId', as: 'user' });
 User.hasMany(UserTermsAcceptance, { foreignKey: 'userId', as: 'termsAcceptances' });
@@ -4350,6 +4419,7 @@ export default {
   PlatformSetting,
   Consultation,
   AccountDispute,
+  ContentReport,
   ProcessedWebhookEvent,
   UserTermsAcceptance,
   PaymentConsent,

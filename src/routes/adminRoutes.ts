@@ -91,6 +91,10 @@ import {
 } from '../controllers/adminController';
 import { authenticate, adminOnly } from '../middleware/auth';
 import validate from '../middleware/validate';
+import { asyncHandler } from '../middleware/errorHandler';
+import { AuthRequest } from '../types';
+import { parseIntParam } from '../utils/helpers';
+import contentReportService from '../services/contentReportService';
 
 const router = Router();
 
@@ -201,6 +205,32 @@ router.post('/disputes/block-mismatch', validate(blockUserMismatchValidation), b
 router.post('/disputes/:id/resolve', resolveDispute);
 router.post('/disputes/:id/reject', rejectDispute);
 router.post('/disputes/process-auto-unblock', processAutoUnblock);
+
+// Reported items (user reports on listings / equipment)
+router.get('/reports', asyncHandler(async (req: AuthRequest, res) => {
+  const result = await contentReportService.listReports({
+    status: req.query.status as string | undefined,
+    page: parseIntParam(req.query.page as string) || 1,
+    limit: parseIntParam(req.query.limit as string) || 50,
+  });
+  res.json({ success: true, data: result.reports, pagination: result.pagination });
+}));
+router.get('/reports/open-count', asyncHandler(async (_req: AuthRequest, res) => {
+  res.json({ success: true, data: { count: await contentReportService.countOpen() } });
+}));
+router.post('/reports/:id/dismiss', asyncHandler(async (req: AuthRequest, res) => {
+  const result = await contentReportService.dismiss(req.params.id, req.user!.id, req.body?.notes);
+  res.json({ success: true, data: result, message: `Dismissed ${result.closed} report${result.closed === 1 ? '' : 's'}` });
+}));
+router.post('/reports/:id/action', asyncHandler(async (req: AuthRequest, res) => {
+  const { takeDown, blockSeller, notes } = req.body || {};
+  const result = await contentReportService.takeAction(req.params.id, req.user!.id, {
+    takeDown: !!takeDown,
+    blockSeller: !!blockSeller,
+    notes,
+  });
+  res.json({ success: true, data: result, message: 'Action taken' });
+}));
 
 // Notification Settings
 router.get('/settings/notifications', getNotificationSettings);
