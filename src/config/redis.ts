@@ -36,6 +36,8 @@ export const getRedisClient = (): Redis => {
       redis = new Redis(url, {
         tls: useTls ? { rejectUnauthorized: false } : undefined,
         maxRetriesPerRequest: 3,
+        lazyConnect: true, // connectRedis() opens the connection; without this ioredis connects on construction
+
         retryStrategy: (times: number) => {
           if (times > 10) {
             logger.error('Redis connection failed after 10 retries');
@@ -78,7 +80,10 @@ export const getRedisClient = (): Redis => {
 export const connectRedis = async (): Promise<void> => {
   try {
     const client = getRedisClient();
-    await client.connect();
+    // Only a fresh lazy client is in 'wait'; connecting again otherwise throws "already connecting/connected"
+    if (client.status === 'wait') {
+      await client.connect();
+    }
     // Test connection
     await client.ping();
     logger.info('Redis connected successfully');
