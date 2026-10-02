@@ -1,57 +1,21 @@
 /**
  * Auth Service Unit Tests
+ *
+ * Models, Stripe, email and admin notifications are mocked; bcrypt and jwt
+ * run for real (with cheap rounds) so hashing and token signing are covered.
  */
 
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 
-// Mock dependencies before importing the service
 jest.mock('../../../models', () => ({
-  User: {
-    findOne: jest.fn(),
-    findByPk: jest.fn(),
-    create: jest.fn(),
-  },
-  RefreshToken: {
-    create: jest.fn(),
-    findOne: jest.fn(),
-    destroy: jest.fn(),
-  },
-  PasswordResetToken: {
-    create: jest.fn(),
-    findOne: jest.fn(),
-    destroy: jest.fn(),
-  },
-  EmailVerificationToken: {
-    create: jest.fn(),
-    findOne: jest.fn(),
-    destroy: jest.fn(),
-  },
-  UserRole: {
-    BUYER: 'buyer',
-    SELLER: 'seller',
-    ADMIN: 'admin',
-  },
-  UserStatus: {
-    ACTIVE: 'active',
-    PENDING: 'pending',
-    SUSPENDED: 'suspended',
-  },
-}));
-
-jest.mock('../../../config/database', () => ({
-  __esModule: true,
-  default: {
-    transaction: jest.fn().mockImplementation((callback) => {
-      if (typeof callback === 'function') {
-        return callback({});
-      }
-      return {
-        commit: jest.fn(),
-        rollback: jest.fn(),
-      };
-    }),
-  },
+  User: { findOne: jest.fn(), findByPk: jest.fn(), create: jest.fn() },
+  RefreshToken: { create: jest.fn(), findOne: jest.fn(), destroy: jest.fn() },
+  PasswordResetToken: { create: jest.fn(), findOne: jest.fn(), destroy: jest.fn() },
+  EmailVerificationToken: { create: jest.fn(), findOne: jest.fn(), destroy: jest.fn() },
+  UserTermsAcceptance: { create: jest.fn() },
+  UserRole: { BUYER: 'BUYER', SELLER: 'SELLER', ADMIN: 'ADMIN', COMPLIANCE_MANAGER: 'COMPLIANCE_MANAGER' },
+  UserStatus: { ACTIVE: 'ACTIVE', BLOCKED: 'BLOCKED', SUSPENDED: 'SUSPENDED', PENDING_VERIFICATION: 'PENDING_VERIFICATION' },
 }));
 
 jest.mock('../../../config', () => ({
@@ -62,315 +26,308 @@ jest.mock('../../../config', () => ({
       expiresIn: '15m',
       refreshExpiresIn: '7d',
     },
+    security: { bcryptRounds: 4, passwordMinLength: 8 },
     frontendUrl: 'http://localhost:5173',
   },
 }));
 
+jest.mock('../../../services/stripeService', () => ({
+  stripeService: { isEnabled: jest.fn().mockReturnValue(false), createCustomer: jest.fn() },
+}));
+
+jest.mock('../../../services/adminNotificationService', () => ({
+  adminNotificationService: { notifyNewUser: jest.fn().mockResolvedValue(undefined) },
+}));
+
 jest.mock('../../../services/emailService', () => ({
   emailService: {
-    sendWelcomeEmail: jest.fn().mockResolvedValue(undefined),
-    sendEmailVerification: jest.fn().mockResolvedValue(undefined),
-    sendPasswordResetEmail: jest.fn().mockResolvedValue(undefined),
+    sendWelcomeEmail: jest.fn().mockResolvedValue(true),
+    sendVerificationEmail: jest.fn().mockResolvedValue(true),
+    sendPasswordResetEmail: jest.fn().mockResolvedValue(true),
   },
 }));
 
-import { User, RefreshToken, UserRole, UserStatus } from '../../../models';
+import { User, RefreshToken, PasswordResetToken, EmailVerificationToken, UserTermsAcceptance, UserRole, UserStatus } from '../../../models';
+import { emailService } from '../../../services/emailService';
 import { authService } from '../../../services/authService';
 
-describe('AuthService', () => {
-  beforeEach(() => {
-    jest.clearAllMocks();
-  });
+const mocked = (fn: unknown) => fn as jest.Mock;
 
+const makeUser = (overrides: Record<string, unknown> = {}) => ({
+  id: 'user-123',
+  email: 'test@example.com',
+  name: 'Test User',
+  role: UserRole.BUYER,
+  status: UserStatus.ACTIVE,
+  password: bcrypt.hashSync('Password123!', 4),
+  verified: false,
+  emailVerified: false,
+  trustScore: 50,
+  memberSince: new Date('2026-01-01'),
+  totalCredits: 0,
+  usedCredits: 0,
+  carrierPulseAccess: false,
+  update: jest.fn().mockResolvedValue(undefined),
+  ...overrides,
+});
+
+beforeEach(() => {
+  jest.clearAllMocks();
+  mocked(RefreshToken.create).mockResolvedValue({});
+});
+
+describe('AuthService', () => {
   describe('register', () => {
-    const mockUserData = {
-      email: 'test@example.com',
+    const input = {
+      email: 'Test@Example.com',
       password: 'Password123!',
-      firstName: 'Test',
-      lastName: 'User',
-      phone: '555-123-4567',
+      name: 'Test User',
       role: UserRole.BUYER,
+      termsAccepted: true,
+      ipAddress: '1.2.3.4',
     };
 
-    it('should register a new user successfully', async () => {
-      const mockCreatedUser = {
-        id: 'user-123',
-        ...mockUserData,
-        password: 'hashed-password',
-        status: UserStatus.ACTIVE,
-        emailVerified: false,
-        toJSON: () => ({
-          id: 'user-123',
-          email: mockUserData.email,
-          firstName: mockUserData.firstName,
-          lastName: mockUserData.lastName,
-        }),
-      };
+    it('creates the user with a hashed password and returns tokens', async () => {
+      mocked(User.findOne).mockResolvedValue(null);
+      mocked(User.create).mockImplementation(async (data: any) => makeUser({ ...data }));
 
-      (User.findOne as jest.Mock).mockResolvedValue(null);
-      (User.create as jest.Mock).mockResolvedValue(mockCreatedUser);
-      (RefreshToken.create as jest.Mock).mockResolvedValue({ token: 'refresh-token' });
+      const result = await authService.register(input);
 
-      const result = await authService.register(mockUserData);
+      expect(User.findOne).toHaveBeenCalledWith({ where: { email: 'test@example.com' } });
+      const created = mocked(User.create).mock.calls[0][0];
+      expect(created.email).toBe('test@example.com');
+      expect(created.password).not.toBe(input.password);
+      expect(await bcrypt.compare(input.password, created.password)).toBe(true);
 
-      expect(result).toHaveProperty('user');
-      expect(result).toHaveProperty('accessToken');
-      expect(result).toHaveProperty('refreshToken');
-      expect(User.findOne).toHaveBeenCalledWith({ where: { email: mockUserData.email } });
-      expect(User.create).toHaveBeenCalled();
+      expect(result.user).toMatchObject({ id: 'user-123', email: 'test@example.com', role: UserRole.BUYER });
+      expect(result.user).not.toHaveProperty('password');
+      expect((jwt.verify(result.tokens.accessToken, 'test-secret') as any).id).toBe('user-123');
+      expect(RefreshToken.create).toHaveBeenCalledWith(
+        expect.objectContaining({ userId: 'user-123', token: result.tokens.refreshToken })
+      );
     });
 
-    it('should throw error if email already exists', async () => {
-      (User.findOne as jest.Mock).mockResolvedValue({
-        id: 'existing-user',
-        email: mockUserData.email,
-      });
+    it('records the signup Terms acceptance', async () => {
+      mocked(User.findOne).mockResolvedValue(null);
+      mocked(User.create).mockImplementation(async (data: any) => makeUser({ ...data }));
 
-      await expect(authService.register(mockUserData)).rejects.toThrow('Email already registered');
+      await authService.register(input);
+
+      expect(UserTermsAcceptance.create).toHaveBeenCalledWith(
+        expect.objectContaining({ userId: 'user-123', ipAddress: '1.2.3.4', termsVersion: 'register-checkbox-1.0' })
+      );
     });
 
-    it('should hash password before saving', async () => {
-      const mockCreatedUser = {
-        id: 'user-123',
-        ...mockUserData,
-        password: 'hashed-password',
-        status: UserStatus.ACTIVE,
-        toJSON: () => ({ id: 'user-123' }),
-      };
-
-      (User.findOne as jest.Mock).mockResolvedValue(null);
-      (User.create as jest.Mock).mockResolvedValue(mockCreatedUser);
-      (RefreshToken.create as jest.Mock).mockResolvedValue({ token: 'refresh-token' });
-
-      await authService.register(mockUserData);
-
-      const createCall = (User.create as jest.Mock).mock.calls[0][0];
-      expect(createCall.password).not.toBe(mockUserData.password);
+    it('rejects an email that is already registered', async () => {
+      mocked(User.findOne).mockResolvedValue(makeUser());
+      await expect(authService.register(input)).rejects.toThrow('User with this email already exists');
+      expect(User.create).not.toHaveBeenCalled();
     });
   });
 
   describe('login', () => {
-    const mockUser = {
-      id: 'user-123',
-      email: 'test@example.com',
-      password: '$2a$10$hashedpassword', // bcrypt hash
-      firstName: 'Test',
-      lastName: 'User',
-      role: UserRole.BUYER,
-      status: UserStatus.ACTIVE,
-      emailVerified: true,
-      update: jest.fn(),
-      toJSON: () => ({
-        id: 'user-123',
+    it('logs in with the right password', async () => {
+      const user = makeUser();
+      mocked(User.findOne).mockResolvedValue(user);
+
+      const result = await authService.login({ email: 'TEST@example.com', password: 'Password123!' });
+
+      expect(User.findOne).toHaveBeenCalledWith({ where: { email: 'test@example.com' } });
+      expect(result.user.email).toBe('test@example.com');
+      expect(result.tokens.accessToken).toBeTruthy();
+      expect(user.update).toHaveBeenCalledWith({ lastLoginAt: expect.any(Date) });
+    });
+
+    it('rejects an unknown email and a wrong password with the same message', async () => {
+      mocked(User.findOne).mockResolvedValue(null);
+      await expect(authService.login({ email: 'x@y.com', password: 'Password123!' })).rejects.toThrow(
+        'Invalid email or password'
+      );
+      mocked(User.findOne).mockResolvedValue(makeUser());
+      await expect(authService.login({ email: 'test@example.com', password: 'wrong-pass' })).rejects.toThrow(
+        'Invalid email or password'
+      );
+    });
+
+    it('rejects blocked and suspended accounts', async () => {
+      mocked(User.findOne).mockResolvedValue(makeUser({ status: UserStatus.BLOCKED }));
+      await expect(authService.login({ email: 'test@example.com', password: 'Password123!' })).rejects.toThrow(
+        'blocked'
+      );
+      mocked(User.findOne).mockResolvedValue(makeUser({ status: UserStatus.SUSPENDED }));
+      await expect(authService.login({ email: 'test@example.com', password: 'Password123!' })).rejects.toThrow(
+        'suspended'
+      );
+    });
+
+    it('runs the session as compliance manager when the user has Carrier Pulse access', async () => {
+      mocked(User.findOne).mockResolvedValue(makeUser({ carrierPulseAccess: true }));
+      const result = await authService.login({
         email: 'test@example.com',
-        firstName: 'Test',
-        lastName: 'User',
-      }),
-    };
-
-    it('should login user with valid credentials', async () => {
-      (User.findOne as jest.Mock).mockResolvedValue(mockUser);
-      (RefreshToken.create as jest.Mock).mockResolvedValue({ token: 'refresh-token' });
-
-      // Mock bcrypt compare
-      jest.spyOn(bcrypt, 'compare').mockImplementation(() => Promise.resolve(true));
-
-      const result = await authService.login('test@example.com', 'Password123!');
-
-      expect(result).toHaveProperty('user');
-      expect(result).toHaveProperty('accessToken');
-      expect(result).toHaveProperty('refreshToken');
-      expect(mockUser.update).toHaveBeenCalledWith({ lastLoginAt: expect.any(Date) });
+        password: 'Password123!',
+        roleHint: 'compliance_manager',
+      });
+      expect(result.user.role).toBe(UserRole.COMPLIANCE_MANAGER);
+      expect(result.needsSubscription).toBeUndefined();
+      expect((jwt.decode(result.tokens.accessToken) as any).role).toBe(UserRole.COMPLIANCE_MANAGER);
     });
 
-    it('should throw error for invalid email', async () => {
-      (User.findOne as jest.Mock).mockResolvedValue(null);
-
-      await expect(
-        authService.login('wrong@example.com', 'Password123!')
-      ).rejects.toThrow('Invalid email or password');
-    });
-
-    it('should throw error for invalid password', async () => {
-      (User.findOne as jest.Mock).mockResolvedValue(mockUser);
-      jest.spyOn(bcrypt, 'compare').mockImplementation(() => Promise.resolve(false));
-
-      await expect(
-        authService.login('test@example.com', 'WrongPassword!')
-      ).rejects.toThrow('Invalid email or password');
-    });
-
-    it('should throw error for inactive user', async () => {
-      const suspendedUser = { ...mockUser, status: UserStatus.SUSPENDED };
-      (User.findOne as jest.Mock).mockResolvedValue(suspendedUser);
-      jest.spyOn(bcrypt, 'compare').mockImplementation(() => Promise.resolve(true));
-
-      await expect(
-        authService.login('test@example.com', 'Password123!')
-      ).rejects.toThrow('Account is suspended');
+    it('flags needsSubscription when the hinted role is missing', async () => {
+      mocked(User.findOne).mockResolvedValue(makeUser());
+      const result = await authService.login({
+        email: 'test@example.com',
+        password: 'Password123!',
+        roleHint: 'compliance_manager',
+      });
+      expect(result.user.role).toBe(UserRole.BUYER);
+      expect(result.needsSubscription).toBe('compliance_manager');
     });
   });
 
   describe('refreshToken', () => {
-    it('should generate new tokens with valid refresh token', async () => {
-      const mockStoredToken = {
-        id: 'token-123',
-        userId: 'user-123',
-        expiresAt: new Date(Date.now() + 86400000), // 1 day from now
-        isRevoked: false,
+    it('rotates a valid refresh token', async () => {
+      const token = jwt.sign({ id: 'user-123' }, 'test-refresh-secret');
+      const stored = {
+        expiresAt: new Date(Date.now() + 86400000),
+        user: makeUser(),
         destroy: jest.fn(),
       };
+      mocked(RefreshToken.findOne).mockResolvedValue(stored);
 
-      const mockUser = {
-        id: 'user-123',
-        email: 'test@example.com',
-        role: UserRole.BUYER,
-        status: UserStatus.ACTIVE,
-        toJSON: () => ({ id: 'user-123' }),
-      };
+      const tokens = await authService.refreshToken(token);
 
-      (RefreshToken.findOne as jest.Mock).mockResolvedValue(mockStoredToken);
-      (User.findByPk as jest.Mock).mockResolvedValue(mockUser);
-      (RefreshToken.create as jest.Mock).mockResolvedValue({ token: 'new-refresh-token' });
-
-      // Mock jwt.verify
-      jest.spyOn(jwt, 'verify').mockImplementation(() => ({
-        id: 'user-123',
-        tokenId: 'token-123',
-      }));
-
-      const result = await authService.refreshToken('valid-refresh-token');
-
-      expect(result).toHaveProperty('accessToken');
-      expect(result).toHaveProperty('refreshToken');
-      expect(mockStoredToken.destroy).toHaveBeenCalled();
+      expect(stored.destroy).toHaveBeenCalled();
+      expect(tokens.accessToken).toBeTruthy();
+      expect(RefreshToken.create).toHaveBeenCalled();
     });
 
-    it('should throw error for expired refresh token', async () => {
-      const expiredToken = {
-        id: 'token-123',
-        userId: 'user-123',
-        expiresAt: new Date(Date.now() - 86400000), // 1 day ago
-        isRevoked: false,
-      };
+    it('rejects unknown, expired and badly signed tokens', async () => {
+      mocked(RefreshToken.findOne).mockResolvedValue(null);
+      await expect(authService.refreshToken('nope')).rejects.toThrow('Invalid refresh token');
 
-      (RefreshToken.findOne as jest.Mock).mockResolvedValue(expiredToken);
-      jest.spyOn(jwt, 'verify').mockImplementation(() => ({
-        id: 'user-123',
-        tokenId: 'token-123',
-      }));
+      const expired = { expiresAt: new Date(Date.now() - 1000), destroy: jest.fn() };
+      mocked(RefreshToken.findOne).mockResolvedValue(expired);
+      await expect(authService.refreshToken('x')).rejects.toThrow('Refresh token expired');
+      expect(expired.destroy).toHaveBeenCalled();
 
-      await expect(authService.refreshToken('expired-token')).rejects.toThrow();
-    });
-
-    it('should throw error for revoked refresh token', async () => {
-      const revokedToken = {
-        id: 'token-123',
-        userId: 'user-123',
-        expiresAt: new Date(Date.now() + 86400000),
-        isRevoked: true,
-      };
-
-      (RefreshToken.findOne as jest.Mock).mockResolvedValue(revokedToken);
-      jest.spyOn(jwt, 'verify').mockImplementation(() => ({
-        id: 'user-123',
-        tokenId: 'token-123',
-      }));
-
-      await expect(authService.refreshToken('revoked-token')).rejects.toThrow();
+      const forged = { expiresAt: new Date(Date.now() + 86400000), destroy: jest.fn(), user: makeUser() };
+      mocked(RefreshToken.findOne).mockResolvedValue(forged);
+      await expect(authService.refreshToken(jwt.sign({ id: 'u' }, 'wrong-secret'))).rejects.toThrow(
+        'Invalid refresh token'
+      );
+      expect(forged.destroy).toHaveBeenCalled();
     });
   });
 
   describe('logout', () => {
-    it('should revoke refresh token on logout', async () => {
-      const mockToken = {
-        id: 'token-123',
-        destroy: jest.fn(),
-      };
-
-      (RefreshToken.findOne as jest.Mock).mockResolvedValue(mockToken);
-      jest.spyOn(jwt, 'verify').mockImplementation(() => ({
-        id: 'user-123',
-        tokenId: 'token-123',
-      }));
-
-      await authService.logout('valid-refresh-token');
-
-      expect(mockToken.destroy).toHaveBeenCalled();
+    it('deletes the given refresh token', async () => {
+      await authService.logout('refresh-token');
+      expect(RefreshToken.destroy).toHaveBeenCalledWith({ where: { token: 'refresh-token' } });
     });
 
-    it('should not throw error if token not found', async () => {
-      (RefreshToken.findOne as jest.Mock).mockResolvedValue(null);
-      jest.spyOn(jwt, 'verify').mockImplementation(() => ({
-        id: 'user-123',
-        tokenId: 'token-123',
-      }));
+    it('logoutAll deletes every refresh token for the user', async () => {
+      await authService.logoutAll('user-123');
+      expect(RefreshToken.destroy).toHaveBeenCalledWith({ where: { userId: 'user-123' } });
+    });
+  });
 
-      await expect(authService.logout('non-existent-token')).resolves.not.toThrow();
+  describe('password reset', () => {
+    it('answers the same way for an unknown email (no enumeration)', async () => {
+      mocked(User.findOne).mockResolvedValue(null);
+      const result = await authService.requestPasswordReset('ghost@example.com');
+      expect(result.message).toMatch(/If an account exists/);
+      expect(emailService.sendPasswordResetEmail).not.toHaveBeenCalled();
+    });
+
+    it('emails a reset link for a real account', async () => {
+      mocked(User.findOne).mockResolvedValue(makeUser());
+      await authService.requestPasswordReset('test@example.com');
+      expect(PasswordResetToken.destroy).toHaveBeenCalledWith({ where: { userId: 'user-123' } });
+      expect(emailService.sendPasswordResetEmail).toHaveBeenCalledWith(
+        'test@example.com',
+        expect.objectContaining({ resetUrl: expect.stringContaining('/reset-password?token=') })
+      );
+    });
+
+    it('resets the password and signs out everywhere', async () => {
+      const user = makeUser();
+      const resetToken = { userId: 'user-123', expiresAt: new Date(Date.now() + 3600000), update: jest.fn() };
+      mocked(PasswordResetToken.findOne).mockResolvedValue(resetToken);
+      mocked(User.findByPk).mockResolvedValue(user);
+
+      await authService.resetPassword('tok', 'NewPassword1!');
+
+      const newHash = user.update.mock.calls[0][0].password;
+      expect(await bcrypt.compare('NewPassword1!', newHash)).toBe(true);
+      expect(resetToken.update).toHaveBeenCalledWith({ usedAt: expect.any(Date) });
+      expect(RefreshToken.destroy).toHaveBeenCalledWith({ where: { userId: 'user-123' } });
+    });
+
+    it('rejects an expired token and a too-short password', async () => {
+      const expired = { userId: 'user-123', expiresAt: new Date(Date.now() - 1000), destroy: jest.fn() };
+      mocked(PasswordResetToken.findOne).mockResolvedValue(expired);
+      await expect(authService.resetPassword('tok', 'NewPassword1!')).rejects.toThrow(/expired/);
+
+      mocked(PasswordResetToken.findOne).mockResolvedValue({
+        userId: 'user-123',
+        expiresAt: new Date(Date.now() + 3600000),
+        update: jest.fn(),
+      });
+      mocked(User.findByPk).mockResolvedValue(makeUser());
+      await expect(authService.resetPassword('tok', 'short')).rejects.toThrow(/at least 8/);
     });
   });
 
   describe('changePassword', () => {
-    it('should change password with valid current password', async () => {
-      const mockUser = {
-        id: 'user-123',
-        password: '$2a$10$hashedpassword',
-        update: jest.fn(),
-      };
-
-      (User.findByPk as jest.Mock).mockResolvedValue(mockUser);
-      jest.spyOn(bcrypt, 'compare').mockImplementation(() => Promise.resolve(true));
-      jest.spyOn(bcrypt, 'hash').mockImplementation(() => Promise.resolve('new-hashed-password'));
-
-      await authService.changePassword('user-123', 'OldPassword!', 'NewPassword123!');
-
-      expect(mockUser.update).toHaveBeenCalledWith({ password: 'new-hashed-password' });
+    it('changes the password when the current one is right', async () => {
+      const user = makeUser();
+      mocked(User.findByPk).mockResolvedValue(user);
+      await authService.changePassword('user-123', 'Password123!', 'NewPassword1!');
+      expect(user.update).toHaveBeenCalledWith({ password: expect.any(String) });
+      expect(RefreshToken.destroy).toHaveBeenCalledWith({ where: { userId: 'user-123' } });
     });
 
-    it('should throw error for incorrect current password', async () => {
-      const mockUser = {
-        id: 'user-123',
-        password: '$2a$10$hashedpassword',
-      };
-
-      (User.findByPk as jest.Mock).mockResolvedValue(mockUser);
-      jest.spyOn(bcrypt, 'compare').mockImplementation(() => Promise.resolve(false));
-
-      await expect(
-        authService.changePassword('user-123', 'WrongPassword!', 'NewPassword123!')
-      ).rejects.toThrow('Current password is incorrect');
+    it('rejects a wrong current password and reusing the same password', async () => {
+      mocked(User.findByPk).mockResolvedValue(makeUser());
+      await expect(authService.changePassword('user-123', 'wrong-pass', 'NewPassword1!')).rejects.toThrow(
+        'Current password is incorrect'
+      );
+      await expect(authService.changePassword('user-123', 'Password123!', 'Password123!')).rejects.toThrow(
+        'must be different'
+      );
     });
   });
 
-  describe('validateToken', () => {
-    it('should return decoded token for valid JWT', () => {
-      const mockPayload = {
-        id: 'user-123',
-        email: 'test@example.com',
-        role: 'buyer',
-      };
+  describe('verifyEmail', () => {
+    it('marks the email verified and the token used', async () => {
+      const user = makeUser({ status: UserStatus.PENDING_VERIFICATION });
+      const token = { userId: 'user-123', expiresAt: new Date(Date.now() + 3600000), update: jest.fn() };
+      mocked(EmailVerificationToken.findOne).mockResolvedValue(token);
+      mocked(User.findByPk).mockResolvedValue(user);
 
-      jest.spyOn(jwt, 'verify').mockImplementation(() => mockPayload);
+      await authService.verifyEmail('tok');
 
-      const result = authService.validateToken('valid-token');
-
-      expect(result).toEqual(mockPayload);
+      expect(user.update).toHaveBeenCalledWith({ emailVerified: true, status: UserStatus.ACTIVE });
+      expect(token.update).toHaveBeenCalledWith({ verifiedAt: expect.any(Date) });
     });
 
-    it('should throw error for invalid JWT', () => {
-      jest.spyOn(jwt, 'verify').mockImplementation(() => {
-        throw new jwt.JsonWebTokenError('invalid token');
-      });
+    it('rejects an unknown token', async () => {
+      mocked(EmailVerificationToken.findOne).mockResolvedValue(null);
+      await expect(authService.verifyEmail('nope')).rejects.toThrow('Invalid or expired verification token');
+    });
+  });
 
-      expect(() => authService.validateToken('invalid-token')).toThrow();
+  describe('getUserById', () => {
+    it('returns the public profile without the password', async () => {
+      mocked(User.findByPk).mockResolvedValue(makeUser());
+      const user = await authService.getUserById('user-123');
+      expect(user).toMatchObject({ id: 'user-123', availableRoles: [UserRole.BUYER] });
+      expect(user).not.toHaveProperty('password');
     });
 
-    it('should throw error for expired JWT', () => {
-      jest.spyOn(jwt, 'verify').mockImplementation(() => {
-        throw new jwt.TokenExpiredError('jwt expired', new Date());
-      });
-
-      expect(() => authService.validateToken('expired-token')).toThrow();
+    it('returns null for an unknown id', async () => {
+      mocked(User.findByPk).mockResolvedValue(null);
+      expect(await authService.getUserById('missing')).toBeNull();
     });
   });
 });

@@ -21,6 +21,8 @@ jest.mock('../../../models', () => ({
     create: jest.fn(),
   },
   SubscriptionPlan: {
+    PACKAGE_TOOL: 'PACKAGE_TOOL',
+    PROFESSIONAL: 'PROFESSIONAL',
     STARTER: 'STARTER',
     PREMIUM: 'PREMIUM',
     ENTERPRISE: 'ENTERPRISE',
@@ -101,14 +103,41 @@ jest.mock('../../../services/stripeService', () => ({
   stripeService: {
     createCustomer: jest.fn().mockResolvedValue({ id: 'cus_test123' }),
     createPaymentIntent: jest.fn().mockResolvedValue({
-      id: 'pi_test123',
-      client_secret: 'pi_test123_secret',
+      success: true,
+      paymentIntentId: 'pi_test123',
+      clientSecret: 'pi_test123_secret',
     }),
     createSubscription: jest.fn().mockResolvedValue({
       id: 'sub_test123',
       url: 'https://checkout.stripe.com/test',
     }),
     cancelSubscription: jest.fn().mockResolvedValue(undefined),
+  },
+}));
+
+// Plan prices come from pricingConfigService (DB-backed); the real one reads
+// PlatformSetting, so stub it with a fixed catalog in creditService's order.
+const plan = (name: string, credits: number, priceMonthly: number, priceYearly: number) => ({
+  name,
+  credits,
+  priceMonthly,
+  priceYearly,
+  stripePriceIdMonthly: `price_${name.toLowerCase()}_monthly`,
+  stripePriceIdYearly: `price_${name.toLowerCase()}_yearly`,
+  features: [],
+});
+const mockPlans = {
+  STARTER: plan('Starter', 5, 29, 290),
+  PREMIUM: plan('Premium', 15, 79, 790),
+  ENTERPRISE: plan('Enterprise', 50, 199, 1990),
+  VIP_ACCESS: plan('VIP', 0, 499, 4990),
+  LEAD_GENERATOR_BUYER: plan('LeadBuyer', 0, 99, 990),
+  LEAD_GENERATOR_BROKER: plan('LeadBroker', 0, 499, 4990),
+};
+jest.mock('../../../services/pricingConfigService', () => ({
+  pricingConfigService: {
+    getSubscriptionPlans: jest.fn(async () => Object.values(mockPlans)),
+    getSubscriptionPlan: jest.fn(async (key: keyof typeof mockPlans) => mockPlans[key]),
   },
 }));
 
@@ -272,10 +301,17 @@ describe('CreditService', () => {
   });
 
   describe('getSubscriptionPlans', () => {
-    it('should return all subscription plans with calculated prices', () => {
-      const plans = creditService.getSubscriptionPlans();
+    it('should return all subscription plans with calculated prices', async () => {
+      const plans = await creditService.getSubscriptionPlans();
 
-      expect(plans).toHaveLength(3);
+      expect(plans.map((p) => p.id)).toEqual([
+        'STARTER',
+        'PREMIUM',
+        'ENTERPRISE',
+        'VIP_ACCESS',
+        'LEAD_GENERATOR_BUYER',
+        'LEAD_GENERATOR_BROKER',
+      ]);
       expect(plans[0]).toHaveProperty('id');
       expect(plans[0]).toHaveProperty('name');
       expect(plans[0]).toHaveProperty('credits');
@@ -285,11 +321,17 @@ describe('CreditService', () => {
       expect(plans[0]).toHaveProperty('pricePerCreditYearly');
     });
 
-    it('should calculate correct price per credit', () => {
-      const plans = creditService.getSubscriptionPlans();
+    it('should calculate correct price per credit', async () => {
+      const plans = await creditService.getSubscriptionPlans();
       const starterPlan = plans.find((p) => p.id === 'STARTER');
 
       expect(starterPlan?.pricePerCreditMonthly).toBe(5.8); // 29 / 5 = 5.8
+      expect(starterPlan?.pricePerCreditYearly).toBe(58); // 290 / 5
+    });
+
+    it('should report 0 per credit for plans without credits', async () => {
+      const plans = await creditService.getSubscriptionPlans();
+      expect(plans.find((p) => p.id === 'VIP_ACCESS')?.pricePerCreditMonthly).toBe(0);
     });
   });
 
@@ -342,7 +384,10 @@ describe('CreditService', () => {
       const result = await creditService.subscribe('user-123', 'STARTER' as any, false);
 
       expect(result).toEqual(mockSubscription);
-      expect(Subscription.create).toHaveBeenCalled();
+      expect(Subscription.create).toHaveBeenCalledWith(
+        expect.objectContaining({ plan: 'STARTER', creditsPerMonth: 5, priceMonthly: 29 })
+      );
+      expect(mockUser.update).toHaveBeenCalledWith({ totalCredits: 5 }, expect.anything());
     });
 
     it('should throw error if active subscription exists', async () => {
@@ -485,8 +530,11 @@ describe('CreditService', () => {
         paymentMethodId: 'pm_test123',
       });
 
-      expect(result).toHaveProperty('paymentIntentId');
-      expect(result).toHaveProperty('clientSecret');
+      expect(result).toEqual({ paymentIntentId: 'pi_test123', clientSecret: 'pi_test123_secret' });
+      const { stripeService } = require('../../../services/stripeService');
+      expect(stripeService.createPaymentIntent).toHaveBeenCalledWith(
+        expect.objectContaining({ amount: 5000, customerId: 'cus_existing' }) // 10 credits x $5
+      );
     });
 
     it('should create Stripe customer if not exists', async () => {
