@@ -14,6 +14,10 @@ import {
   getPipelineStats,
   searchNewCarriers,
   exportNewCarriersCsv,
+  chameleonScan,
+  exportChameleonScanCsv,
+  vinTransfers,
+  exportVinTransfersCsv,
 } from '../controllers/leadsController';
 
 const router = Router();
@@ -29,6 +33,12 @@ router.get('/carriers/:dot', getCarrierDetail);
 // Brand-new DOT registrations (FMCSA census) with contact email
 router.get('/new-carriers', searchNewCarriers);
 router.get('/new-carriers/export.csv', exportNewCarriersCsv);
+
+// New DOTs tied to shut-down carriers (bulk chameleon search, FMCSA census)
+router.get('/chameleon-scan', chameleonScan);
+router.get('/chameleon-scan/export.csv', exportChameleonScanCsv);
+router.get('/vin-transfers', vinTransfers);
+router.get('/vin-transfers/export.csv', exportVinTransfersCsv);
 
 // Saved leads
 router.get('/', listLeads);

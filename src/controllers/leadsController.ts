@@ -9,6 +9,8 @@ import morproLinqService, {
 } from '../services/morproLinqService';
 import fmcsaLeadsService from '../services/fmcsaLeadsService';
 import fmcsaNewCarriersService, { type NewCarrierFilters } from '../services/fmcsaNewCarriersService';
+import chameleonScanService, { type LinkReason, type ScanFilters } from '../services/chameleonScanService';
+import vinTransferScanService, { type TransferFilters } from '../services/vinTransferScanService';
 import type { InsuranceLead, InsuranceLeadFilters } from '../types/carrierData';
 import { logLeadActivity, type LeadActivityKind } from '../services/leadActivity.service';
 import logger from '../utils/logger';
@@ -718,5 +720,176 @@ export async function exportNewCarriersCsv(req: Request, res: Response) {
   }
   res.setHeader('Content-Type', 'text/csv; charset=utf-8');
   res.setHeader('Content-Disposition', `attachment; filename="new-carriers-${date}.csv"`);
+  res.send(lines.join('\n'));
+}
+
+// ---------------------------------------------------------------------------
+// Chameleon Search — new active DOTs tied to shut-down carriers (FMCSA census).
+// The scan takes ~30s, so it runs in the background; the page polls.
+// ---------------------------------------------------------------------------
+
+const SCAN_REASONS: LinkReason[] = ['prior_revoke', 'phone', 'email', 'officer', 'name', 'address'];
+
+function scanFiltersFrom(q: Request['query']): ScanFilters {
+  const flag = (v: unknown) => v === 'true' || v === '1';
+  const reason = String(q.reason || '') as LinkReason;
+  return {
+    state: q.state ? String(q.state) : null,
+    q: q.q ? String(q.q) : null,
+    minScore: q.minScore ? parseInt10(q.minScore, 0) : 0,
+    reason: SCAN_REASONS.includes(reason) ? reason : null,
+    forHireOnly: flag(q.forHireOnly),
+    withMcOnly: flag(q.withMcOnly),
+    multiSignalOnly: flag(q.multiSignalOnly),
+    reRegisteredOnly: flag(q.reRegisteredOnly),
+    authorizedOnly: flag(q.authorizedOnly),
+  };
+}
+
+// GET /api/admin/leads/chameleon-scan?days=180&state=&q=&minScore=&reason=&forHireOnly=&withMcOnly=&multiSignalOnly=&offset=&limit=&refresh=1
+export async function chameleonScan(req: Request, res: Response) {
+  const result = await chameleonScanService.get(req.query.days, req.query.refresh === '1');
+  if (result.status !== 'ready') return res.json({ success: true, data: result });
+
+  const { scan } = result;
+  const matches = chameleonScanService.filter(scan, scanFiltersFrom(req.query));
+  const offset = Math.max(parseInt10(req.query.offset, 0), 0);
+  const limit = Math.min(Math.max(parseInt10(req.query.limit, 50), 1), 100);
+  const counts = { critical: 0, high: 0, moderate: 0, low: 0 };
+  for (const c of matches) counts[c.riskLevel]++;
+  res.json({
+    success: true,
+    data: {
+      status: 'ready',
+      days: scan.days,
+      since: scan.since,
+      builtAt: scan.builtAt,
+      dataThrough: scan.dataThrough,
+      scanned: scan.candidates.length,
+      total: matches.length,
+      counts,
+      offset,
+      limit,
+      hasMore: offset + limit < matches.length,
+      results: matches.slice(offset, offset + limit),
+    },
+  });
+}
+
+// GET /api/admin/leads/chameleon-scan/export.csv?...same filters
+export async function exportChameleonScanCsv(req: Request, res: Response) {
+  const scan = await chameleonScanService.cached(chameleonScanService.normalizeDays(req.query.days));
+  if (!scan) return res.status(409).json({ success: false, error: 'Scan is not ready yet — run the search first' });
+
+  const rows = chameleonScanService.filter(scan, scanFiltersFrom(req.query));
+  const headers = [
+    'score', 'risk', 'dot_number', 'mc_number', 'legal_name', 'registered_date', 'city', 'state', 'power_units',
+    'for_hire', 'officer', 'phone', 'email', 'signals', 'linked_dot', 'linked_mc', 'linked_name', 'linked_signals',
+    'linked_dot_inactive', 'linked_authority_inactive', 'linked_safety_rating', 'linked_inactive_since',
+    'linked_inactive_reason', 'linked_last_active', 'linked_ever_authorized', 're_registered', 'other_linked_dots',
+  ];
+  const escape = (v: unknown) => {
+    if (v == null) return '';
+    const s = String(v);
+    return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+  };
+  const lines = [headers.join(',')];
+  for (const c of rows) {
+    // The carrier it re-registered from, when there is one, else the strongest link.
+    const top = c.links.find((l) => l.dotNumber === c.reRegistered?.dotNumber) || c.links[0];
+    lines.push([
+      c.score, c.riskLevel, c.dotNumber, c.mcNumber, c.legalName, c.registeredDate, c.city, c.state, c.powerUnits,
+      c.forHire ? 'yes' : 'no', c.officer, c.phone, c.email, c.reasons.join(' '),
+      top?.dotNumber, top?.mcNumber, top?.legalName, top?.reasons.join(' '),
+      top?.dotInactive ? 'yes' : 'no', top?.authorityInactive ? 'yes' : 'no', top?.safetyRating, top?.inactiveSince,
+      top?.inactiveReason, top?.lastActive, top?.everAuthorized == null ? '' : top.everAuthorized ? 'yes' : 'no',
+      c.reRegistered ? c.reRegistered.basis : '',
+      c.links.filter((l) => l !== top).map((l) => l.dotNumber).join(' '),
+    ].map(escape).join(','));
+  }
+  res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+  res.setHeader('Content-Disposition', `attachment; filename="chameleon-search-${scan.days}d-${new Date().toISOString().slice(0, 10)}.csv"`);
+  res.send(lines.join('\n'));
+}
+
+// ---------------------------------------------------------------------------
+// Truck transfers — power units (by VIN) that moved from a carrier to a new MC.
+// A minute or two per scan, so it runs in the background; the page polls.
+// ---------------------------------------------------------------------------
+
+function transferFiltersFrom(q: Request['query']): TransferFilters {
+  const flag = (v: unknown) => v === 'true' || v === '1';
+  return {
+    state: q.state ? String(q.state) : null,
+    q: q.q ? String(q.q) : null,
+    minUnits: q.minUnits ? parseInt10(q.minUnits, 2) : 2,
+    minScore: q.minScore ? parseInt10(q.minScore, 0) : 0,
+    troubledOnly: flag(q.troubledOnly),
+    hiddenOnly: flag(q.hiddenOnly),
+  };
+}
+
+// GET /api/admin/leads/vin-transfers?days=180&state=&q=&minUnits=&minScore=&troubledOnly=&hiddenOnly=&offset=&limit=&refresh=1
+export async function vinTransfers(req: Request, res: Response) {
+  const result = await vinTransferScanService.get(req.query.days, req.query.refresh === '1');
+  if (result.status !== 'ready') return res.json({ success: true, data: result });
+
+  const { scan } = result;
+  const matches = vinTransferScanService.filter(scan, transferFiltersFrom(req.query));
+  const offset = Math.max(parseInt10(req.query.offset, 0), 0);
+  const limit = Math.min(Math.max(parseInt10(req.query.limit, 50), 1), 100);
+  const counts = { critical: 0, high: 0, moderate: 0, low: 0 };
+  for (const t of matches) counts[t.riskLevel]++;
+  res.json({
+    success: true,
+    data: {
+      status: 'ready',
+      days: scan.days,
+      since: scan.since,
+      builtAt: scan.builtAt,
+      stats: scan.stats,
+      scanned: scan.transfers.length,
+      total: matches.length,
+      counts,
+      offset,
+      limit,
+      hasMore: offset + limit < matches.length,
+      results: matches.slice(offset, offset + limit),
+    },
+  });
+}
+
+// GET /api/admin/leads/vin-transfers/export.csv?...same filters — one row per moved truck
+export async function exportVinTransfersCsv(req: Request, res: Response) {
+  const scan = vinTransferScanService.cached(vinTransferScanService.normalizeDays(req.query.days));
+  if (!scan) return res.status(409).json({ success: false, error: 'Scan is not ready yet — run the search first' });
+
+  const rows = vinTransferScanService.filter(scan, transferFiltersFrom(req.query));
+  const headers = [
+    'score', 'risk', 'trucks_moved', 'new_dot', 'new_mc', 'new_name', 'new_registered', 'new_location', 'new_power_units',
+    'new_officer', 'new_phone', 'new_email', 'old_dot', 'old_mc', 'old_name', 'old_location', 'old_power_units', 'old_officer',
+    'old_phone', 'old_problems', 'old_inactive_since', 'old_inactive_reason', 'same_identity', 'vin', 'make',
+    'old_first_seen', 'old_last_seen', 'new_first_seen', 'new_last_seen',
+  ];
+  const escape = (v: unknown) => {
+    if (v == null) return '';
+    const s = String(v);
+    return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+  };
+  const lines = [headers.join(',')];
+  for (const t of rows) {
+    const n = t.newCarrier;
+    const o = t.oldCarrier;
+    for (const u of t.units) {
+      lines.push([
+        t.score, t.riskLevel, t.unitCount, n.dotNumber, n.mcNumber, n.legalName, n.registeredDate, n.location, n.powerUnits,
+        n.officer, n.phone, n.email, o.dotNumber, o.mcNumber, o.legalName, o.location, o.powerUnits, o.officer,
+        o.phone, o.troubles.join('; '), o.inactiveSince, o.inactiveReason, t.sameIdentity.join(' ') || 'none',
+        u.vin, u.make, u.oldFirstSeen, u.oldLastSeen, u.newFirstSeen, u.newLastSeen,
+      ].map(escape).join(','));
+    }
+  }
+  res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+  res.setHeader('Content-Disposition', `attachment; filename="truck-transfers-${scan.days}d-${new Date().toISOString().slice(0, 10)}.csv"`);
   res.send(lines.join('\n'));
 }
