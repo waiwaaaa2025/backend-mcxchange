@@ -1,4 +1,5 @@
 import { Request } from 'express';
+import { Op } from 'sequelize';
 import { UserAccessLog } from '../models';
 import logger from './logger';
 
@@ -25,4 +26,21 @@ export function recordAccess(userId: string, event: string, req: Request, detail
   }).catch((err) => {
     logger.error('Failed to record access log', { userId, event, error: err });
   });
+}
+
+// A session renewed by refresh token never passes through login, and refresh
+// tokens last 30 days — so without this a returning user's IP is never seen
+// again after the first login. Logged once per user per IP per day, not on
+// every 15-minute refresh.
+export function recordSession(userId: string, req: Request): void {
+  const ipAddress = clientIp(req);
+  if (!userId || !ipAddress) return;
+  UserAccessLog.findOne({
+    where: { userId, ipAddress, createdAt: { [Op.gte]: new Date(Date.now() - 24 * 60 * 60 * 1000) } },
+    attributes: ['id'],
+  })
+    .then((seen) => {
+      if (!seen) recordAccess(userId, 'SESSION', req);
+    })
+    .catch((err) => logger.error('Failed to record session access', { userId, error: err }));
 }

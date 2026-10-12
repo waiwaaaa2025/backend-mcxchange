@@ -1,10 +1,11 @@
 import { Request, Response } from 'express';
+import jwt from 'jsonwebtoken';
 import { body } from 'express-validator';
 import { authService } from '../services/authService';
 import { asyncHandler } from '../middleware/errorHandler';
-import { AuthRequest } from '../types';
+import { AuthRequest, JWTPayload } from '../types';
 import { UserRole } from '../models';
-import { recordAccess } from '../utils/accessLog';
+import { recordAccess, recordSession, clientIp } from '../utils/accessLog';
 
 // Validation rules
 export const registerValidation = [
@@ -47,9 +48,12 @@ export const register = asyncHandler(async (req: Request, res: Response) => {
     phone,
     companyName,
     termsAccepted: termsAccepted === true || termsAccepted === 'true',
-    ipAddress: (req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim() || req.ip,
+    ipAddress: clientIp(req),
     userAgent: req.headers['user-agent'],
   });
+
+  // Signup IP, recorded whether or not the Terms checkbox was sent.
+  recordAccess(result.user.id, 'SIGNUP', req);
 
   res.status(201).json({
     success: true,
@@ -105,6 +109,10 @@ export const refreshToken = asyncHandler(async (req: Request, res: Response) => 
   }
 
   const tokens = await authService.refreshToken(refreshToken);
+
+  // Verified by refreshToken above; decode only to learn whose session this is.
+  const sessionUserId = (jwt.decode(refreshToken) as JWTPayload | null)?.id;
+  if (sessionUserId) recordSession(sessionUserId, req);
 
   res.json({
     success: true,
