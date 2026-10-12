@@ -124,8 +124,8 @@ class IpBlockService {
    * Whether the auto-blocker must leave this IP alone: already blocked,
    * recently unblocked by an admin, or used by an admin account.
    */
-  async autoBlockExempt(ipAddress: string, adminIps: Set<string>): Promise<string | null> {
-    if (adminIps.has(ipAddress)) return 'admin account seen on this IP';
+  async autoBlockExempt(ipAddress: string, protectedIps: Set<string>): Promise<string | null> {
+    if (protectedIps.has(ipAddress)) return 'admin or paying subscriber seen on this IP';
     const row = await BlockedIp.findOne({ where: { ipAddress } });
     if (!row) return null;
     if (row.status === 'BLOCKED' && (!row.expiresAt || new Date(row.expiresAt) > new Date())) return 'already blocked';

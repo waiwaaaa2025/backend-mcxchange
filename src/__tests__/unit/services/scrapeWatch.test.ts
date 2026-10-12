@@ -96,4 +96,29 @@ describe('assessClient', () => {
     expect(Number.isFinite(result.reasons.length)).toBe(true);
     expect(result.isLikelyBot).toBe(false);
   });
+
+  it('flags an anonymous visitor walking the catalogue in a normal browser', () => {
+    const result = assessClient(
+      client({ requests: 60, detailViews: 52, listingsTouched: 52, users: 0, anonymousRequests: 60,
+        firstSeen: new Date(Date.now() - 3 * HOUR) })
+    );
+
+    expect(result.isLikelyBot).toBe(true);
+    expect(result.reasons[0]).toContain('Walked 52 listings');
+  });
+
+  it('does not apply the catalogue-walk rule to signed-in buyers', () => {
+    const result = assessClient(client({ requests: 60, listingsTouched: 52, users: 1, firstSeen: new Date(Date.now() - 3 * HOUR) }));
+
+    expect(result.isLikelyBot).toBe(false);
+  });
+
+  it('counts a datacenter network as a signal', () => {
+    const result = assessClient(
+      client({ requests: 40, listingsTouched: 12, users: 0, geo: { hosting: true } })
+    );
+
+    expect(result.reasons).toContain('Datacenter network');
+    expect(result.isLikelyBot).toBe(true);
+  });
 });

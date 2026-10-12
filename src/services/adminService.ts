@@ -1,4 +1,5 @@
 import type { TruckInput } from './truckService';
+import { assessClient, withGeo } from './scrapeWatchService';
 import { Op, QueryTypes } from 'sequelize';
 import { publicListingTitle, scrubIdentity } from '../utils/listingSanitize';
 import sequelize from '../config/database';
@@ -2855,16 +2856,18 @@ class AdminService {
         user: { id: r.userId, name: r.userName, email: r.userEmail },
         listing: r.listingId ? { id: r.listingId, mcNumber: r.mcNumber, legalName: r.legalName } : null,
       })),
-      clients: rows.map((r) => ({
-        block: blockState(r.ipAddress),
-        ...r,
-        requests: Number(r.requests),
-        detailViews: Number(r.detailViews),
-        searches: Number(r.searches),
-        listingsTouched: Number(r.listingsTouched),
-        users: Number(r.users),
-        anonymousRequests: Number(r.anonymousRequests),
-      })),
+      clients: (await withGeo(rows)).map((r) => {
+        const client = {
+          ...r,
+          requests: Number(r.requests),
+          detailViews: Number(r.detailViews),
+          searches: Number(r.searches),
+          listingsTouched: Number(r.listingsTouched),
+          users: Number(r.users),
+          anonymousRequests: Number(r.anonymousRequests),
+        };
+        return { block: blockState(r.ipAddress), ...client, verdict: assessClient(client) };
+      }),
     };
   }
 

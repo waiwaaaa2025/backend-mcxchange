@@ -4,6 +4,7 @@ import { PlatformSetting } from '../models';
 import { adminNotificationService } from './adminNotificationService';
 import { ipBlockService, AUTO_BLOCK_HOURS } from './ipBlockService';
 import logger from '../utils/logger';
+import { geolocateIps, IpGeo } from '../utils/ipGeo';
 
 /**
  * Daily watch over the catalogue access log.
@@ -24,6 +25,7 @@ export interface ScrapeClient {
   userAgents: string | null;
   firstSeen: Date;
   lastSeen: Date;
+  geo?: IpGeo | null;
 }
 
 // Kept deliberately in step with the frontend panel (AdminScrapeActivityPage).
@@ -37,7 +39,16 @@ const LIMITER_PER_MIN = 120;
 const LAST_RUN_KEY = 'scrape_watch_last_run_at';
 const MIN_HOURS_BETWEEN_CHECKS = 20;
 
-/** Signals that separate a bot from a customer. Three or more reads as a bot. */
+// Distinct listings an anonymous visitor can open before it counts as walking
+// the catalogue. Anyone shopping for an MC signs up long before this — and a
+// visitor who never signs in can't buy one anyway.
+const ANON_LISTING_WALK = 25;
+
+/**
+ * Signals that separate a bot from a customer. Three or more reads as a bot,
+ * and so does an anonymous catalogue walk on its own. The admin panel shows
+ * this verdict as-is, so the screen and the auto-blocker always agree.
+ */
 export function assessClient(c: ScrapeClient): { isLikelyBot: boolean; reasons: string[] } {
   const reasons: string[] = [];
 
@@ -52,9 +63,21 @@ export function assessClient(c: ScrapeClient): { isLikelyBot: boolean; reasons: 
   if (c.listingsTouched >= 10) reasons.push(`Opened ${c.listingsTouched} listings`);
   if (perMinute >= LIMITER_PER_MIN * 0.5) reasons.push(`~${Math.round(perMinute)} req/min`);
   if (c.searches >= 20) reasons.push(`${c.searches} searches`);
+  if (c.geo?.hosting || c.geo?.proxy) reasons.push(c.geo.proxy ? 'VPN / proxy network' : 'Datacenter network');
 
-  return { isLikelyBot: reasons.length >= 3, reasons };
+  const anonWalk = c.users === 0 && c.listingsTouched >= ANON_LISTING_WALK;
+  if (anonWalk) reasons.unshift(`Walked ${c.listingsTouched} listings without signing in`);
+
+  return { isLikelyBot: anonWalk || reasons.length >= 3, reasons };
 }
+
+/** Attach geolocation (datacenter/VPN flags feed the verdict). Never throws. */
+export async function withGeo<T extends { ipAddress: string | null }>(rows: T[]): Promise<(T & { geo: IpGeo | null })[]> {
+  const geo = await geolocateIps(rows.map((r) => r.ipAddress).filter((ip): ip is string => !!ip)).catch(() => ({} as Record<string, IpGeo | null>));
+  return rows.map((r) => ({ ...r, geo: (r.ipAddress && geo[r.ipAddress]) || null }));
+}
+
+const TRUSTED_USER = `(u.role = 'ADMIN' OR EXISTS (SELECT 1 FROM subscriptions s WHERE s.userId = u.id AND s.status = 'ACTIVE'))`;
 
 class ScrapeWatchService {
   /** Catalogue readers over the last `hours`, busiest first. */
@@ -82,7 +105,7 @@ class ScrapeWatchService {
     );
 
     // MySQL returns COUNT/SUM as strings; the callers do arithmetic on these.
-    return rows.map((r) => ({
+    return withGeo(rows.map((r) => ({
       ...r,
       requests: Number(r.requests),
       detailViews: Number(r.detailViews),
@@ -90,7 +113,7 @@ class ScrapeWatchService {
       listingsTouched: Number(r.listingsTouched),
       users: Number(r.users),
       anonymousRequests: Number(r.anonymousRequests),
-    }));
+    })));
   }
 
   /**
@@ -179,16 +202,20 @@ class ScrapeWatchService {
     return { scanned: clients.length, flagged: flagged.length };
   }
 
-  /** IPs any admin account has used in the last 30 days — never auto-blocked. */
-  private async adminIps(): Promise<Set<string>> {
+  /**
+   * IPs an admin or a paying subscriber has used in the last 30 days — never
+   * auto-blocked (a block refuses the whole site). A bot on one of these still
+   * shows in the daily mail for a person to judge.
+   */
+  private async protectedIps(): Promise<Set<string>> {
     const rows = await sequelize.query<{ ipAddress: string }>(
       `SELECT DISTINCT l.ipAddress FROM listing_access_logs l
          JOIN users u ON u.id = l.userId
-        WHERE u.role = 'ADMIN' AND l.createdAt >= NOW() - INTERVAL 30 DAY AND l.ipAddress IS NOT NULL
+        WHERE ${TRUSTED_USER} AND l.createdAt >= NOW() - INTERVAL 30 DAY AND l.ipAddress IS NOT NULL
        UNION
        SELECT DISTINCT a.ipAddress FROM user_access_logs a
          JOIN users u ON u.id = a.userId
-        WHERE u.role = 'ADMIN' AND a.createdAt >= NOW() - INTERVAL 30 DAY AND a.ipAddress IS NOT NULL`,
+        WHERE ${TRUSTED_USER} AND a.createdAt >= NOW() - INTERVAL 30 DAY AND a.ipAddress IS NOT NULL`,
       { type: QueryTypes.SELECT }
     );
     return new Set(rows.map((r) => r.ipAddress));
@@ -209,11 +236,11 @@ class ScrapeWatchService {
       .filter((c) => c.isLikelyBot && c.client.ipAddress);
     if (scored.length === 0) return { scanned: clients.length, blocked: [] };
 
-    const adminIps = await this.adminIps();
+    const protectedIps = await this.protectedIps();
     const blocked: typeof scored = [];
     for (const c of scored) {
       const ip = c.client.ipAddress as string;
-      const exempt = await ipBlockService.autoBlockExempt(ip, adminIps);
+      const exempt = await ipBlockService.autoBlockExempt(ip, protectedIps);
       if (exempt) {
         if (exempt !== 'already blocked') logger.info('Auto-block skipped', { ip, why: exempt });
         continue;
