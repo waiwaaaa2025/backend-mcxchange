@@ -2906,6 +2906,7 @@ UserAccessLog.init(
     updatedAt: false,
     indexes: [
       { fields: ['userId'] },
+      { fields: ['ipAddress'] }, // admin IP lookup: other accounts on the same IP
       { fields: ['event'] },
       { fields: ['createdAt'] },
     ],

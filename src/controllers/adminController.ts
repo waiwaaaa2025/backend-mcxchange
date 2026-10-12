@@ -13,6 +13,7 @@ import { disputeEvidenceService } from '../services/disputeEvidenceService';
 import logger from '../utils/logger';
 import { isIP } from 'net';
 import { ipBlockService } from '../services/ipBlockService';
+import { ipLookupService } from '../services/ipLookupService';
 
 // Validation rules
 export const rejectListingValidation = [
@@ -1507,6 +1508,15 @@ export const getUserActivityLog = asyncHandler(async (req: AuthRequest, res: Res
     success: true,
     data: activityLog,
   });
+});
+
+// IP lookup: a user's login IPs with location, and other accounts on those IPs
+// (or, given an IP, every account seen on it).
+export const getIpLookup = asyncHandler(async (req: AuthRequest, res: Response) => {
+  const q = String(req.query.q || '').trim();
+  if (q.length < 2) throw new BadRequestError('Enter a name, email or IP address');
+  const data = await ipLookupService.lookup(q);
+  res.json({ success: true, data });
 });
 
 // Get comprehensive activity log with filters

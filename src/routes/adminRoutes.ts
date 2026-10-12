@@ -79,6 +79,7 @@ import {
   blockIp,
   unblockIp,
   getActivityLog,
+  getIpLookup,
   createAndSendInvoice,
   createInvoiceValidation,
   getAdminInvoices,
@@ -177,6 +178,7 @@ router.delete('/offers/:id', adminDeleteOffer);
 // Action log
 router.get('/action-log', getActionLog);
 router.get('/activity-log', getActivityLog);
+router.get('/ip-lookup', getIpLookup);
 
 // Settings
 router.get('/settings', getSettings);
