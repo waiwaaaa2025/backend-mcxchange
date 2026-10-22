@@ -139,12 +139,48 @@ class AdminService {
       // Revenue
       totalRevenue: parseFloat(result.totalRevenue || '0'),
       monthlyRevenue: 0, // Would need date filtering for this
+      // Inspections (from each listing's stored FMCSA snapshot)
+      ...(await this.getListingInspectionStats()),
     };
 
     // Cache for 5 minutes
     await cacheService.set(cacheKey, stats, CacheTTL.MEDIUM);
 
     return stats;
+  }
+
+  // Count listings with/without inspections on record. fmcsaData was written
+  // flat and nested under `carrier`, with a few names for the same count, so
+  // it's read the same way MarketplacePage.transformListing reads it.
+  private async getListingInspectionStats() {
+    const rows = await sequelize.query<{ fmcsaData: string | null }>(
+      'SELECT fmcsaData FROM listings',
+      { type: QueryTypes.SELECT }
+    );
+
+    let listingsWithInspections = 0;
+    let listingsWithoutInspections = 0;
+    let totalInspections = 0;
+    for (const row of rows) {
+      if (!row.fmcsaData) continue;
+      let parsed: any;
+      try {
+        parsed = JSON.parse(row.fmcsaData);
+      } catch {
+        continue;
+      }
+      const src = parsed?.carrier ?? parsed;
+      const count = Number(src?.totalInspections ?? src?.driverInsp ?? src?.totalDriverInspections);
+      if (!Number.isFinite(count)) continue;
+      if (count > 0) {
+        listingsWithInspections++;
+        totalInspections += count;
+      } else {
+        listingsWithoutInspections++;
+      }
+    }
+
+    return { listingsWithInspections, listingsWithoutInspections, totalInspections };
   }
 
   // Get pending listings for review
