@@ -46,6 +46,7 @@ import { emailService } from './emailService';
 import { adminNotificationService } from './adminNotificationService';
 import { config } from '../config';
 import logger from '../utils/logger';
+import { socrata } from './fmcsaLeadsService';
 import type Stripe from 'stripe';
 import { stripeService, SUBSCRIPTION_PRICE_IDS } from './stripeService';
 import { buyerPreferencesService, BuyerPreferencesInput } from './buyerPreferencesService';
@@ -925,10 +926,52 @@ class AdminService {
       ],
     });
 
+    const inspections = await this.getInspectionCountsByDot(listings.map((l) => l.dotNumber));
+
     return {
-      listings,
+      listings: listings.map((l) => ({
+        ...l.toJSON(),
+        inspections: l.dotNumber ? inspections.get(String(l.dotNumber).replace(/\D/g, '')) ?? null : null,
+      })),
       pagination: getPaginationInfo(page, limit, total),
     };
+  }
+
+  // Total inspections (24 mo) per DOT from FMCSA's SMS results dataset — one
+  // Socrata query for the whole page instead of a lookup per row. The stored
+  // fmcsaData snapshots mostly lack inspection fields, so this is the source.
+  // Each DOT is cached for a day; a DOT FMCSA doesn't list is left out (unknown).
+  private async getInspectionCountsByDot(dotNumbers: (string | null | undefined)[]) {
+    const dots = [...new Set(dotNumbers.map((d) => String(d ?? '').replace(/\D/g, '')).filter(Boolean))];
+    const counts = new Map<string, number>();
+    const missing: string[] = [];
+
+    for (const dot of dots) {
+      const cached = await cacheService.get<number>(`${CacheKeys.FMCSA}insp_total:${dot}`);
+      if (cached !== null && cached !== undefined) counts.set(dot, cached);
+      else missing.push(dot);
+    }
+
+    for (let i = 0; i < missing.length; i += 100) {
+      const chunk = missing.slice(i, i + 100);
+      const rows = await socrata<{ dot_number: string; insp_total: string }>('4y6x-dmck', {
+        $select: 'dot_number, insp_total',
+        $where: `dot_number in (${chunk.map((d) => `'${d}'`).join(',')})`,
+        $limit: String(chunk.length * 2),
+      }, 10_000);
+      if (!rows) {
+        logger.warn('Admin listings: FMCSA inspection counts unavailable');
+        continue;
+      }
+      for (const row of rows) {
+        const count = parseInt(row.insp_total, 10);
+        if (!Number.isFinite(count)) continue;
+        counts.set(row.dot_number, count);
+        await cacheService.set(`${CacheKeys.FMCSA}insp_total:${row.dot_number}`, count, CacheTTL.FMCSA);
+      }
+    }
+
+    return counts;
   }
 
   // Get single listing by ID (admin view - returns any status)
