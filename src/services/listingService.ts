@@ -54,6 +54,7 @@ function normalizeAmazonStatus(status: string | undefined | null): AmazonRelaySt
   if (normalized === 'ACTIVE') return AmazonRelayStatus.ACTIVE;
   if (normalized === 'PENDING') return AmazonRelayStatus.PENDING;
   if (normalized === 'SUSPENDED') return AmazonRelayStatus.SUSPENDED;
+  if (normalized === 'REJECTED') return AmazonRelayStatus.REJECTED;
 
   return AmazonRelayStatus.NONE;
 }

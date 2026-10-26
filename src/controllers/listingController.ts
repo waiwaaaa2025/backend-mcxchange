@@ -15,6 +15,7 @@ import { canViewSoldListing, soldListingStub, maskBuyerListingRows } from '../ut
 import { Listing, ListingStatus } from '../models';
 import { fmcsaService } from '../services/fmcsaService';
 import { carrierDataService } from '../services/carrierDataService';
+import { attachOosStats } from '../services/listingOosStats';
 
 /**
  * VIP listings are visible only to Premium subscribers (and grandfathered
@@ -129,10 +130,14 @@ export const getListings = asyncHandler(async (req: AuthRequest, res: Response) 
     return;
   }
 
+  // Real inspection/OOS totals for the cards — merged before sanitizing,
+  // which needs the unmasked DOT to look them up.
+  const enriched = await attachOosStats(result.listings);
+
   // Withhold carrier identity from anyone who hasn't unlocked the listing.
   // Note the predicate is ownership, not the SELLER role: holding a seller
   // account entitles you to your own listings, not to every other seller's.
-  let listings = result.listings;
+  let listings = enriched;
   if (!isAdmin) {
     const unlockedIds = userId
       ? new Set(
@@ -145,8 +150,7 @@ export const getListings = asyncHandler(async (req: AuthRequest, res: Response) 
         )
       : new Set<string>();
 
-    listings = result.listings.map((l: any) => {
-      const listing = l.toJSON ? l.toJSON() : { ...l };
+    listings = enriched.map((listing: any) => {
       const entitled = !!userId && (listing.sellerId === userId || unlockedIds.has(listing.id));
       return entitled ? listing : sanitizeListing(listing);
     });

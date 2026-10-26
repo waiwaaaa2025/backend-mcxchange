@@ -79,11 +79,14 @@ export enum SafetyRating {
   NONE = 'NONE'
 }
 
+// Sellers pick ACTIVE, SUSPENDED, NONE ("Never Registered") or REJECTED.
+// PENDING is legacy: kept so existing rows stay valid, no longer offered.
 export enum AmazonRelayStatus {
   NONE = 'NONE',
   PENDING = 'PENDING',
   ACTIVE = 'ACTIVE',
-  SUSPENDED = 'SUSPENDED'
+  SUSPENDED = 'SUSPENDED',
+  REJECTED = 'REJECTED'
 }
 
 export enum AuthorityType {
