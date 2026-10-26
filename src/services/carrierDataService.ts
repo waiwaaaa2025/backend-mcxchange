@@ -14,29 +14,14 @@ import { normalizeLinqReport } from './linqReportNormalizer';
 import logger from '../utils/logger';
 import { AppError, TooManyRequestsError } from '../middleware/errorHandler';
 
-// A carrier-data provider. Both upstreams expose the same /carriers/:dot/*
-// endpoint family (including a bundled /report that returns every section in
-// one call); they differ only in base URL, path prefix, and auth header.
+// A carrier-data provider. LINQ exposes the /carriers/:dot/*
+// endpoint family; this captures its base URL, path prefix, and auth header.
 interface CarrierUpstream {
   name: string;
   baseUrl: string;
   prefix: string;
   headers(): Record<string, string>;
 }
-
-// Legacy MorPro box — holds the marketplace carrier dataset, no /api/v1 prefix,
-// authenticated with X-API-Key. No per-month quota.
-const legacyUpstream: CarrierUpstream = {
-  name: 'legacy',
-  baseUrl: config.morproCarrier.baseUrl,
-  // The legacy box serves carriers under /api/carriers/:dot (no version segment);
-  // MORPRO_CARRIER_API_URL is just the host, so the prefix supplies /api.
-  prefix: '/api',
-  headers(): Record<string, string> {
-    const key = config.morproCarrier.apiKey;
-    return key ? { 'X-API-Key': key } : {};
-  },
-};
 
 function isoDateOffset(days: number): string {
   return new Date(Date.now() + days * 86_400_000).toISOString().slice(0, 10);
@@ -221,66 +206,10 @@ class CarrierDataService {
   }
 
   /**
-   * Fetch a full report from one upstream via its bundled /report endpoint —
-   * ONE call that returns every section. Used for the legacy box, whose /report
-   * returns the complete report in ~1s. Same outcome semantics as fetchReport
-   * (404 → notFound; 429/401/5xx/timeout → error the caller fails over on).
-   */
-  private async fetchBundledReport(
-    up: CarrierUpstream,
-    dotNumber: string,
-    timeoutMs: number
-  ): Promise<ReportFetch> {
-    const url = `${up.baseUrl}${up.prefix}/carriers/${dotNumber}/report`;
-
-    let res: Response;
-    try {
-      res = await fetchWithTimeout(url, up.headers(), timeoutMs);
-    } catch {
-      logger.warn(`Carrier upstream '${up.name}' unreachable for DOT ${dotNumber}`);
-      return { kind: 'error', status: 503 };
-    }
-
-    if (res.status === 404) return { kind: 'notFound' };
-    if (!res.ok) {
-      const code = await readUpstreamCode(res);
-      logger.warn(
-        `Carrier upstream '${up.name}' ${res.status} for DOT ${dotNumber}${code ? ` (${code})` : ''}`
-      );
-      return { kind: 'error', status: res.status };
-    }
-
-    const raw: any = await res.json().catch(() => null);
-    if (!raw || !raw.carrier || isErrorBody(raw) || isErrorBody(raw.carrier)) return { kind: 'notFound' };
-
-    return {
-      kind: 'ok',
-      report: {
-        carrier: raw.carrier ?? null,
-        authority: raw.authority ?? null,
-        safety: raw.safety ?? null,
-        inspections: raw.inspections ?? null,
-        violations: raw.violations ?? null,
-        crashes: raw.crashes ?? null,
-        insurance: raw.insurance ?? null,
-        fleet: raw.fleet ?? null,
-        cargo: raw.cargo ?? null,
-        documents: raw.documents ?? null,
-        related: raw.related ?? null,
-        percentiles: raw.percentiles ?? null,
-        monitoring: raw.monitoring ?? null,
-        compliance: raw.compliance ?? null,
-      },
-    };
-  }
-
-  /**
-   * Get full carrier report — checks Redis first, then fetches from the legacy
-   * box via its fast bundled /report (~1s, one call, all sections), falling back
-   * to LINQ (per-section fan-out) if legacy is down/slow. Returns null only when
-   * both upstreams report the carrier does not exist; throws with an accurate
-   * status when both fail otherwise, so a rate-limit or outage is never masked
-   * as a 404.
+   * Get full carrier report — checks Redis first, then fetches from LINQ
+   * (per-section fan-out). Returns null only when LINQ reports the carrier does
+   * not exist; throws with an accurate status otherwise, so a rate-limit or
+   * outage is never masked as a 404.
    */
   /**
    * FMCSA fills for what the provider lacks: inspections/BASIC violations when it
@@ -326,23 +255,13 @@ class CarrierDataService {
     let otherStatus = 0;
     let notFoundCount = 0;
 
-    // Legacy box primary — reachable from the production dyno again and fastest
-    // by far: its bundled /report returns the full report in ~1s (one call).
-    // LINQ is the fallback (per-section fan-out) for when legacy is down/slow.
-    const attempts: Array<{
-      up: CarrierUpstream;
-      timeoutMs: number;
-      mode: 'bundled' | 'sections';
-    }> = [
-      { up: legacyUpstream, timeoutMs: 6000, mode: 'bundled' },
-      { up: linqUpstream, timeoutMs: 8000, mode: 'sections' },
+    // All carrier data comes from LINQ (per-section fan-out).
+    const attempts: Array<{ up: CarrierUpstream; timeoutMs: number }> = [
+      { up: linqUpstream, timeoutMs: 8000 },
     ];
 
-    for (const { up, timeoutMs, mode } of attempts) {
-      const result =
-        mode === 'bundled'
-          ? await this.fetchBundledReport(up, dotNumber, timeoutMs)
-          : await this.fetchReport(up, dotNumber, timeoutMs);
+    for (const { up, timeoutMs } of attempts) {
+      const result = await this.fetchReport(up, dotNumber, timeoutMs);
 
       if (result.kind === 'ok') {
         if (up.name === 'linq') result.report = normalizeLinqReport(result.report);
