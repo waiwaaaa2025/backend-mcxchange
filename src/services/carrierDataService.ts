@@ -11,6 +11,7 @@ import cacheService from './cacheService';
 import morproLinqService, { safetyLabel, type LinqSearchFilters } from './morproLinqService';
 import fmcsaLeadsService from './fmcsaLeadsService';
 import { normalizeLinqReport } from './linqReportNormalizer';
+import { applyFmcsaRegistry, fetchFmcsaRegistry, REGISTRY_MARKER } from './fmcsaRegistryOverlay';
 import logger from '../utils/logger';
 import { AppError, TooManyRequestsError } from '../middleware/errorHandler';
 
@@ -224,6 +225,9 @@ class CarrierDataService {
     await applyBasicPercentiles(report, dotNumber).catch((err) =>
       logger.warn(`BASIC percentile estimate failed for DOT ${dotNumber}: ${(err as Error).message}`)
     );
+    await fetchFmcsaRegistry(report, dotNumber).catch((err) =>
+      logger.warn(`FMCSA registry lookup failed for DOT ${dotNumber}: ${(err as Error).message}`)
+    );
   }
 
   async getFullReport(dotNumber: string): Promise<MorProCarrierReport | null> {
@@ -240,13 +244,16 @@ class CarrierDataService {
       const report = cached.carrier?.legal_name !== undefined ? normalizeLinqReport(cached) : cached;
       // Entries cached before the FMCSA fallbacks existed get them once.
       const r = report as any;
-      if (r[FALLBACK_MARKER] === undefined || r[PERCENTILE_MARKER] === undefined) {
+      const markers = [FALLBACK_MARKER, PERCENTILE_MARKER, REGISTRY_MARKER];
+      if (markers.some((m) => r[m] === undefined)) {
+        const before = markers.filter((m) => r[m] !== undefined).length;
         await this.applyFmcsaSafetyData(report, dotNumber);
-        if (r[FALLBACK_MARKER] !== undefined || r[PERCENTILE_MARKER] !== undefined) {
+        if (markers.filter((m) => r[m] !== undefined).length > before) {
           await cacheService.cacheCarrierReport(dotNumber, report);
         }
       }
-      return report;
+      // LINQ's authority/insurance are stale since the Motus cutover — FMCSA wins.
+      return applyFmcsaRegistry(report);
     }
 
     const startTime = Date.now();
@@ -267,6 +274,7 @@ class CarrierDataService {
         if (up.name === 'linq') result.report = normalizeLinqReport(result.report);
         await this.applyFmcsaSafetyData(result.report, dotNumber);
         await cacheService.cacheCarrierReport(dotNumber, result.report);
+        applyFmcsaRegistry(result.report);
         logger.info(
           `Carrier report for DOT ${dotNumber} served by '${up.name}' in ${Date.now() - startTime}ms`
         );
