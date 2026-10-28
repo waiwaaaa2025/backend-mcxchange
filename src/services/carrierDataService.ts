@@ -1,6 +1,7 @@
 import { config } from '../config';
 import { applyFmcsaSafetyFallback, FALLBACK_MARKER } from './fmcsaSafetyFallback';
 import { applyBasicPercentiles, PERCENTILE_MARKER } from './basicPercentileService';
+import { reportFromSafer } from './linqSaferReport';
 import {
   MorProCarrierReport,
   InsuranceLead,
@@ -129,6 +130,51 @@ class CarrierDataService {
    * failure (non-critical enrichment).
    */
   private async fetchReport(
+    up: CarrierUpstream,
+    dotNumber: string,
+    timeoutMs: number
+  ): Promise<ReportFetch> {
+    const safer = await this.fetchReportViaSafer(up, dotNumber, timeoutMs);
+    if (safer) return safer;
+    logger.warn(`LINQ /safer failed for DOT ${dotNumber} — falling back to per-section fetch`);
+    return this.fetchReportBySection(up, dotNumber, timeoutMs);
+  }
+
+  /**
+   * Three calls instead of twelve: `/safer` carries the profile plus authority,
+   * safety, active policies and the census columns behind fleet/cargo/documents;
+   * `/insurance` adds history, gaps and upcoming cancellations; `/crashes` stays
+   * capped like any enrichment section. Returns null when `/safer` itself fails
+   * (timeout, 5xx) so the caller can fall back to the per-section fetch.
+   */
+  private async fetchReportViaSafer(
+    up: CarrierUpstream,
+    dotNumber: string,
+    timeoutMs: number
+  ): Promise<ReportFetch | null> {
+    const headers = up.headers();
+    const carrierUrl = `${up.baseUrl}${up.prefix}/carriers/${dotNumber}`;
+    const [saferRes, insurance, crashes] = await Promise.all([
+      fetchWithTimeout(`${up.baseUrl}${up.prefix}/safer/${dotNumber}`, headers, timeoutMs).catch(() => null),
+      this.fetchSection(carrierUrl, headers, 'insurance', timeoutMs),
+      this.fetchSection(carrierUrl, headers, 'crashes', Math.min(timeoutMs, SECTION_TIMEOUT_MS)),
+    ]);
+    if (!saferRes) return null;
+    if (saferRes.status === 404) return { kind: 'notFound' };
+    // Quota/auth failures would hit the per-section calls too — don't retry them.
+    if ([401, 403, 429].includes(saferRes.status)) return { kind: 'error', status: saferRes.status };
+    if (!saferRes.ok) {
+      const code = await readUpstreamCode(saferRes);
+      logger.warn(`LINQ /safer ${saferRes.status} for DOT ${dotNumber}${code ? ` (${code})` : ''}`);
+      return null;
+    }
+    const body: any = await saferRes.json().catch(() => null);
+    if (!body) return null;
+    if (isErrorBody(body)) return { kind: 'notFound' };
+    return { kind: 'ok', report: reportFromSafer(body, insurance, crashes) as any };
+  }
+
+  private async fetchReportBySection(
     up: CarrierUpstream,
     dotNumber: string,
     timeoutMs: number
