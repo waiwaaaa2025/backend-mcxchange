@@ -106,6 +106,14 @@ const REPORT_SECTIONS = [
 // Anything exceeding this degrades to null rather than blocking the response.
 const SECTION_TIMEOUT_MS = 3000;
 
+// Sections the report pages can't do without. They get the full report timeout:
+// LINQ cold calls run 4–5s (probed 2026-10-28), and a 3s cap cached DOT 3156784
+// for 24h with no authority or safety ("Not Authorized", no BASICs). Each LINQ
+// section carries dot_number, so its absence means the section never arrived.
+const CORE_SECTIONS = ['authority', 'safety', 'insurance'] as const;
+const CORE_REFETCH_MARKER = '_coreRefetched';
+const missingCore = (report: any) => CORE_SECTIONS.some((s) => report?.[s]?.dot_number == null);
+
 class CarrierDataService {
   /**
    * Fetch a full report from one upstream by calling the base carrier endpoint
@@ -151,7 +159,12 @@ class CarrierDataService {
     // timeout and failing to null so slow enrichment endpoints can't stall it.
     const sections = await Promise.all(
       REPORT_SECTIONS.map((ep) =>
-        this.fetchSection(baseUrl, headers, ep, Math.min(timeoutMs, SECTION_TIMEOUT_MS))
+        this.fetchSection(
+          baseUrl,
+          headers,
+          ep,
+          (CORE_SECTIONS as readonly string[]).includes(ep) ? timeoutMs : Math.min(timeoutMs, SECTION_TIMEOUT_MS)
+        )
       )
     );
     const [
@@ -237,6 +250,10 @@ class CarrierDataService {
       // Poisoned entry written before not-found bodies were rejected — drop it.
       logger.warn(`Discarding cached not-found report for DOT ${dotNumber}`);
       await cacheService.invalidateCarrierReport(dotNumber);
+    } else if (cached && missingCore(cached) && !(cached as any)[CORE_REFETCH_MARKER]) {
+      // A core section timed out when this was cached — fetch fresh once.
+      logger.warn(`Cached report for DOT ${dotNumber} lacks a core section — refetching`);
+      await cacheService.invalidateCarrierReport(dotNumber);
     } else if (cached) {
       logger.info(`Carrier report cache HIT for DOT ${dotNumber} — serving instantly`);
       // LINQ-sourced entries (they keep raw snake_case fields) are re-normalized
@@ -272,6 +289,8 @@ class CarrierDataService {
 
       if (result.kind === 'ok') {
         if (up.name === 'linq') result.report = normalizeLinqReport(result.report);
+        // Don't refetch on every read when LINQ genuinely lacks a section.
+        if (missingCore(result.report)) (result.report as any)[CORE_REFETCH_MARKER] = true;
         await this.applyFmcsaSafetyData(result.report, dotNumber);
         await cacheService.cacheCarrierReport(dotNumber, result.report);
         applyFmcsaRegistry(result.report);
