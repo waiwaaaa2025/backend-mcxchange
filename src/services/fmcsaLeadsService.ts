@@ -38,8 +38,14 @@ import {
   InsuranceSnapshot,
 } from '../types/carrierData';
 import cacheService from './cacheService';
-import { safetyLabel, safetyCode } from './morproLinqService';
+import { safetyLabel, safetyCode, LinqCarrierRow, LinqSearchFilters } from './morproLinqService';
 import logger from '../utils/logger';
+
+export type CensusSearchFilters = Pick<
+  LinqSearchFilters,
+  'state' | 'status' | 'safety_rating' | 'min_fleet_size' | 'max_fleet_size' | 'name_contains' | 'added_before' | 'added_after'
+>;
+export type CensusCarrierRow = LinqCarrierRow & { phone: string | null; email: string | null };
 
 const SOCRATA_BASE = 'https://data.transportation.gov/resource';
 const DATASET_CANCELLATIONS = '3uet-3z4i';
@@ -726,6 +732,78 @@ class FmcsaLeadsService {
    * Public FMCSA census phone/email for a set of carriers — one query per chunk of
    * 150. Used to fill in contact details the carrier-data provider doesn't have.
    */
+  /**
+   * One page of carrier search straight from FMCSA's census, for the filters
+   * LINQ's search can't serve (it ignores safety rating and added dates, and
+   * 500s on state + status). Every filter runs server-side, so a page is one
+   * query where LINQ needed up to five scanned pages. Rows come in LINQ's search
+   * row shape plus the census phone/email. Pages by DOT like LINQ does, so either
+   * source's cursor works with the other. Null on any failure (Socrata throttles
+   * anonymous callers) so the caller can fall back to LINQ.
+   */
+  async searchCensusCarriers(
+    filters: CensusSearchFilters,
+    cursor: string | number | null,
+    limit: number
+  ): Promise<{ carriers: CensusCarrierRow[]; hasMore: boolean; nextCursor: number | null } | null> {
+    const where: string[] = [];
+    if (filters.state) where.push(`phy_state='${filters.state.replace(/[^A-Za-z]/g, '').toUpperCase()}'`);
+    const status = (filters.status || '').toUpperCase();
+    if (status === 'ACTIVE') where.push(`status_code='A'`);
+    else if (status === 'INACTIVE') where.push(`status_code='I'`);
+    else if (status) return null; // e.g. REVOKED — the census has no such code
+    const rating = safetyCode(filters.safety_rating);
+    if (rating) where.push(`safety_rating='${rating.replace(/[^A-Z]/g, '')}'`);
+    if (filters.min_fleet_size != null) where.push(`power_units::number >= ${Math.floor(Number(filters.min_fleet_size)) || 0}`);
+    if (filters.max_fleet_size != null && Number(filters.max_fleet_size) < Number.MAX_SAFE_INTEGER) {
+      where.push(`power_units::number <= ${Math.floor(Number(filters.max_fleet_size)) || 0}`);
+    }
+    if (filters.name_contains) {
+      const name = filters.name_contains.toUpperCase().replace(/'/g, "''").replace(/[%_]/g, '');
+      if (name) where.push(`upper(legal_name) like '%${name}%'`);
+    }
+    const after = toStamp(filters.added_after);
+    const before = toStamp(filters.added_before);
+    if (after) where.push(`add_date >= '${after}'`);
+    if (before) where.push(`add_date <= '${before}'`);
+    const from = Number(cursor);
+    // dot_number is a number column here — casting it makes Socrata sort a full scan.
+    if (cursor != null && cursor !== '' && Number.isFinite(from)) where.push(`dot_number > ${Math.floor(from)}`);
+
+    const rows = await socrata<any>(
+      DATASET_CENSUS,
+      {
+        $select:
+          'dot_number, legal_name, dba_name, phy_state, phy_city, status_code, power_units, total_drivers, safety_rating, add_date, phone, email_address',
+        ...(where.length ? { $where: where.join(' AND ') } : {}),
+        $order: 'dot_number',
+        $limit: String(limit + 1),
+      },
+      15_000
+    );
+    if (!rows) return null;
+
+    const page = rows.slice(0, limit);
+    const num = (v: unknown) => (v == null || v === '' || isNaN(Number(v)) ? null : Number(v));
+    const carriers: CensusCarrierRow[] = page.map((r) => ({
+      dot_number: String(r.dot_number),
+      legal_name: r.legal_name ?? null,
+      dba_name: r.dba_name ?? null,
+      state: r.phy_state ?? null,
+      city: r.phy_city ?? null,
+      status: r.status_code === 'A' ? 'ACTIVE' : r.status_code === 'I' ? 'INACTIVE' : r.status_code ?? null,
+      power_units: num(r.power_units),
+      drivers: num(r.total_drivers),
+      safety_rating: r.safety_rating ?? null,
+      add_date: r.add_date ?? null,
+      insurance_summary: null,
+      phone: formatPhone(r.phone),
+      email: (r.email_address || '').trim() || null,
+    }));
+    const hasMore = rows.length > limit;
+    return { carriers, hasMore, nextCursor: hasMore ? Number(page[page.length - 1].dot_number) : null };
+  }
+
   async contactsFor(dots: string[]): Promise<Map<string, CarrierContact>> {
     const wanted = Array.from(new Set(dots.map((d) => String(d).trim()).filter(Boolean)));
     const out = new Map<string, CarrierContact>();

@@ -67,26 +67,34 @@ export function safetyCode(value: string | null | undefined): string | null {
 }
 
 // Filters LINQ can't be trusted with, applied to the rows we get back instead
-// (all verified live 2026-09-14):
+// (verified live 2026-09-14, re-checked 2026-10-28):
 // - `safety_rating` is ignored by LINQ; rows carry the FMCSA code (S/C/U), and
 //   unrated carriers never match.
-// - `status` combined with `state` makes every cursor page after the first fail
-//   with a 500 after ~30s, so when both are set status is matched on the row
+// - `status` combined with `state` 500s after ~30s (since 2026-10-28 on the
+//   first page too), so when both are set status is matched on the row
 //   (ACTIVE/INACTIVE). REVOKED has no row value and 500s in LINQ regardless.
+// - `added_before` / `added_after` are ignored; rows carry add_date (YYYYMMDD).
+// carrierSearchService sends searches with any of these to FMCSA's census,
+// which filters server-side; this row matching is the fallback when it can't.
 export function splitLocalFilters(filters: LinqSearchFilters): {
   linq: LinqSearchFilters;
   matches: (row: LinqCarrierRow) => boolean;
   hasLocal: boolean;
 } {
-  const { safety_rating, ...linq } = filters;
+  const { safety_rating, added_before, added_after, ...linq } = filters;
   const code = safetyCode(safety_rating);
   const status = (filters.status || '').toUpperCase();
   const localStatus = filters.state && (status === 'ACTIVE' || status === 'INACTIVE') ? status : null;
   if (localStatus) delete linq.status;
+  const stamp = (v?: string) => (/^\d{8}$/.test((v || '').replace(/-/g, '')) ? (v || '').replace(/-/g, '') : null);
+  const after = stamp(added_after);
+  const before = stamp(added_before);
   const matches = (row: LinqCarrierRow) =>
     (!code || (row.safety_rating || '').toUpperCase() === code) &&
-    (!localStatus || (row.status || '').toUpperCase() === localStatus);
-  return { linq, matches, hasLocal: !!(code || localStatus) };
+    (!localStatus || (row.status || '').toUpperCase() === localStatus) &&
+    (!after || String(row.add_date || '') >= after) &&
+    (!before || (!!row.add_date && String(row.add_date) <= before));
+  return { linq, matches, hasLocal: !!(code || localStatus || after || before) };
 }
 
 export interface LinqFilteredSearchResult {

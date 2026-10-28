@@ -1,5 +1,6 @@
 import { Lead, User, UserRole } from '../../../models';
 import morproLinqService, { type LinqSearchFilters } from '../../../services/morproLinqService';
+import carrierSearch from '../../../services/carrierSearchService';
 import type { ToolDef } from '../../core/types';
 
 function isoDateOffset(days: number): string {
@@ -66,8 +67,8 @@ export function buildAdminTools(): ToolDef[] {
           filters.insurance_cancels_before = isoDateOffset(args.insuranceExpiresWithinDays);
           filters.has_active_insurance = true;
         }
-        // Safety rating (and status alongside state) are matched on our side.
-        const res = await morproLinqService.searchCarriersFiltered(filters);
+        // Filters LINQ can't serve go to FMCSA's census — see carrierSearchService.
+        const res = await carrierSearch.searchCarriers(filters);
         if (!res) return { error: 'LINQ search failed' };
         return {
           has_more: res.hasMore,

@@ -3,11 +3,11 @@ import { Op, WhereOptions, fn, col, literal } from 'sequelize';
 import { Lead, LeadStatus, User, UserRole, AgentAction } from '../models';
 import morproLinqService, {
   safetyLabel,
-  splitLocalFilters,
   type LinqSearchFilters,
   type LinqCarrierRow,
 } from '../services/morproLinqService';
 import fmcsaLeadsService from '../services/fmcsaLeadsService';
+import carrierSearch, { type CarrierSearchResult } from '../services/carrierSearchService';
 import fmcsaNewCarriersService, { type NewCarrierFilters } from '../services/fmcsaNewCarriersService';
 import chameleonScanService, { type LinkReason, type ScanFilters } from '../services/chameleonScanService';
 import vinTransferScanService, { type TransferFilters } from '../services/vinTransferScanService';
@@ -136,19 +136,22 @@ async function withInsurance<T extends { dotNumber: string }>(rows: T[]) {
 // Used by CSV export (small, bounded). NEVER use on the list page —
 // the per-row /carrier hydration is the slowness culprit. Phone/email live on
 // the LINQ detail record, not /search; the cancellation date is on the row.
-async function hydrateForCsv(rows: LinqCarrierRow[]) {
+async function hydrateForCsv(rows: CarrierSearchResult['carriers'], fromCensus: boolean) {
   // FMCSA's census is the carrier's own filing and answers for the whole batch in
-  // one query, so it is the number we publish; LINQ is asked only about the rows
-  // the census leaves incomplete.
+  // one query (none when the rows came from it), so it is the number we publish.
+  // LINQ's profile is a copy of the census row, so it's only asked about carriers
+  // the census has no record of.
   const dots = rows.map((c) => String(c.dot_number));
-  const census = await fmcsaLeadsService.contactsFor(dots);
+  const census = fromCensus
+    ? new Map(rows.map((c) => [String(c.dot_number), { phone: c.phone ?? null, email: c.email ?? null }]))
+    : await fmcsaLeadsService.contactsFor(dots);
 
   return Promise.all(rows.map(async (c) => {
     const dot = String(c.dot_number);
     const hit = census.get(dot);
     let phone = hit?.phone || null;
     let email = hit?.email || null;
-    if (!phone || !email) {
+    if (!hit) {
       const carrier = (await morproLinqService.getCarrier(dot)) as any;
       phone = phone || carrier?.phone || carrier?.cell_phone || null;
       email = email || carrier?.email || null;
@@ -190,14 +193,14 @@ export async function searchCarriers(req: Request, res: Response) {
     limit,
     ...(cursor ? { cursor } : {}),
   };
-  const result = await morproLinqService.searchCarriersFiltered(filters);
+  const result = await carrierSearch.searchCarriers(filters);
   if (!result) {
     return res.status(502).json({ success: false, error: 'LINQ search unavailable' });
   }
 
-  // No per-row hydration — search response only. Safety rating, and status when
-  // combined with state, are matched on our side — see splitLocalFilters. The
-  // insurance column is filled from FMCSA for the page as a whole.
+  // No per-row hydration — search response only. Filters LINQ can't serve go to
+  // FMCSA's census — see carrierSearchService. The insurance column is filled
+  // from FMCSA for the page as a whole.
   const carriers = await withInsurance(result.carriers.map((c) => rowToListShape(c)));
 
   res.json({
@@ -262,14 +265,12 @@ export async function exportCarriersCsv(req: Request, res: Response) {
     return sendCarriersCsv(res, rows.slice(0, maxRows));
   }
 
-  // Safety (and status alongside state) can't go to LINQ — match rows here.
-  const { linq: baseFilters, matches, hasLocal } = splitLocalFilters(buildLinqFilters(req.query));
-
+  const baseFilters = buildLinqFilters(req.query);
   const collected: Awaited<ReturnType<typeof hydrateForCsv>> = [];
   const pageSize = 50; // LINQ max
-  // Local filters can discard most of a page; cap the scan so a sparse match
-  // can't walk an entire state.
-  const maxScanPages = Math.ceil(maxRows / pageSize) * (hasLocal ? 4 : 1);
+  // Filters LINQ can't serve go to FMCSA's census (carrierSearchService); if that's
+  // down, each page falls back to scanning LINQ pages, so cap the pages read.
+  const maxScanPages = Math.ceil(maxRows / pageSize) * 2;
   let pagesRead = 0;
   let cursor: string | number | undefined;
 
@@ -279,17 +280,16 @@ export async function exportCarriersCsv(req: Request, res: Response) {
       limit: pageSize,
       ...(cursor != null ? { cursor } : {}),
     };
-    const result = await morproLinqService.searchCarriers(filters);
-    if (!result || (result.carriers || []).length === 0) break;
+    const result = await carrierSearch.searchCarriers(filters, { minRows: pageSize });
+    if (!result) break;
 
     const remaining = maxRows - collected.length;
-    const slice = (result.carriers || []).filter(matches).slice(0, remaining);
-    const hydrated = await hydrateForCsv(slice);
-    collected.push(...hydrated);
+    const slice = (result.carriers || []).slice(0, remaining);
+    collected.push(...(await hydrateForCsv(slice, result.source === 'census')));
 
-    // LINQ ignores `page`; follow next_cursor or we'd re-read page 1 forever.
-    if (!result.has_more || result.next_cursor == null || ++pagesRead >= maxScanPages) break;
-    cursor = result.next_cursor;
+    // Follow the cursor (LINQ ignores `page`) or we'd re-read page 1 forever.
+    if (!result.hasMore || result.nextCursor == null || ++pagesRead >= maxScanPages) break;
+    cursor = result.nextCursor;
   }
 
   return sendCarriersCsv(res, await withInsurance(collected));

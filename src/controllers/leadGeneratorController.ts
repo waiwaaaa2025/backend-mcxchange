@@ -4,11 +4,10 @@ import { AuthRequest } from '../types';
 import { LeadGeneratorSave, User, UserRole } from '../models';
 import morproLinqService, {
   safetyLabel,
-  splitLocalFilters,
   type LinqSearchFilters,
-  type LinqSearchResult,
 } from '../services/morproLinqService';
 import fmcsaLeadsService from '../services/fmcsaLeadsService';
+import carrierSearch, { CarrierSearchResult } from '../services/carrierSearchService';
 import type { InsuranceLead, InsuranceLeadFilters } from '../types/carrierData';
 import { getLeadGeneratorAccess } from '../services/entitlementService';
 import logger from '../utils/logger';
@@ -228,9 +227,8 @@ export async function searchCarriers(req: AuthRequest, res: Response) {
     ...(cursor ? { cursor } : {}),
   };
 
-  // Safety rating, and status when combined with state, are matched on our side
-  // (LINQ ignores / 500s on them) — see splitLocalFilters.
-  const result = await morproLinqService.searchCarriersFiltered(filters);
+  // Filters LINQ can't serve go to FMCSA's census — see carrierSearchService.
+  const result = await carrierSearch.searchCarriers(filters);
   if (!result) {
     return res.status(502).json({ success: false, error: 'Carrier search unavailable' });
   }
@@ -239,10 +237,12 @@ export async function searchCarriers(req: AuthRequest, res: Response) {
   // insurance policy / authority record), so collapse to one row per DOT here.
   const byDot = new Map<string, ReturnType<typeof toRow>>();
   for (const c of result.carriers) {
-    const row = toRow(c);
+    const row = { ...toRow(c), phone: c.phone ?? null, email: c.email ?? null };
     if (!byDot.has(row.dotNumber)) byDot.set(row.dotNumber, row);
   }
-  const carriers = await withContacts(await withInsurance([...byDot.values()]));
+  // Census rows already carry the census phone/email — nothing more to look up.
+  const rows = await withInsurance([...byDot.values()]);
+  const carriers = result.source === 'census' ? rows : await withContacts(rows);
 
   res.json({
     success: true,
@@ -278,13 +278,13 @@ export async function getCarrierContact(req: AuthRequest, res: Response) {
   let email = census?.email || null;
 
   let carrier: any = null;
-  if (!phone || !email) {
+  if (!census) {
     carrier = await morproLinqService.getCarrier(dot);
     phone = phone || carrier?.phone || carrier?.cell_phone || null;
     email = email || carrier?.email || null;
   }
 
-  if (!carrier && !phone && !email) {
+  if (!census && !carrier) {
     return res.status(404).json({ success: false, error: 'Carrier not found' });
   }
 
@@ -320,10 +320,10 @@ export async function getCarrierContactsBatch(req: AuthRequest, res: Response) {
   // it leaves incomplete. One carrier failing there must not fail the whole page —
   // those rows come back with nulls and the UI shows no contact for them.
   const census = await fmcsaLeadsService.contactsFor(dots);
-  const gaps = dots.filter((dot) => {
-    const hit = census.get(dot);
-    return !hit?.phone || !hit?.email;
-  });
+  // LINQ's profile is a copy of this same census row, so it only adds anything
+  // for carriers the census has no record of (probed 2026-10-28: 45 lookups on a
+  // census-backed page filled in nothing).
+  const gaps = dots.filter((dot) => !census.has(dot));
   const fromProvider = await mapLimit(gaps, 12, async (dot) => {
     try {
       const c = (await morproLinqService.getCarrier(dot)) as any;
@@ -546,7 +546,7 @@ export async function exportCsv(req: AuthRequest, res: Response) {
     // Buyer: just the page they're viewing (25 rows). Fast enough to buffer, and
     // fetching first lets us still return a clean 502 if the search backend is down.
     const cursor = cursorParam;
-    const result = await morproLinqService.searchCarriersFiltered(
+    const result = await carrierSearch.searchCarriers(
       { ...baseFilters, limit: 25, ...(cursor ? { cursor } : {}) },
       { minRows: 25 }
     );
@@ -559,8 +559,13 @@ export async function exportCsv(req: AuthRequest, res: Response) {
         .json({ success: false, error: 'No carriers matched those filters. Try widening them.' });
     }
     const lines = [headers.join(',')];
-    const pageRows = await csvRowsWithInsurance((result.carriers || []).slice(0, 25).map(rowFromCarrier));
-    const census = await fmcsaLeadsService.contactsFor(pageRows.map((r) => String(r.dot_number)));
+    const pageCarriers = (result.carriers || []).slice(0, 25);
+    const pageRows = await csvRowsWithInsurance(pageCarriers.map(rowFromCarrier));
+    // Census rows already carry their contacts.
+    const census =
+      result.source === 'census'
+        ? new Map(pageCarriers.map((c) => [String(c.dot_number), { phone: c.phone ?? null, email: c.email ?? null }]))
+        : await fmcsaLeadsService.contactsFor(pageRows.map((r) => String(r.dot_number)));
     for (const row of pageRows) {
       const hit = census.get(String(row.dot_number));
       row.phone = hit?.phone || '';
@@ -590,11 +595,10 @@ export async function exportCsv(req: AuthRequest, res: Response) {
   //
   // LINQ rejects limit > 50 with a 400 and pages by cursor (it ignores `page`).
   const pageSize = 50;
-  // Safety (and status alongside state) can't go to LINQ — match rows here, and
-  // cap the scan so a sparse match can't walk an entire state.
-  const { linq: brokerFilters, matches, hasLocal } = splitLocalFilters(baseFilters);
-  const maxScanPages = Math.ceil(maxRows / pageSize) * (hasLocal ? 4 : 1);
-  const firstPage = await morproLinqService.searchCarriers({ ...brokerFilters, limit: pageSize });
+  // Filters LINQ can't serve go to FMCSA's census (carrierSearchService); if that's
+  // down, each page falls back to scanning LINQ pages, so cap the pages read.
+  const maxScanPages = Math.ceil(maxRows / pageSize) * 2;
+  const firstPage = await carrierSearch.searchCarriers({ ...baseFilters, limit: pageSize }, { minRows: pageSize });
   if (!firstPage) {
     logger.warn('LG export: first search page failed', { filters: baseFilters });
     return res.status(502).json({ success: false, error: 'Carrier search unavailable' });
@@ -615,25 +619,25 @@ export async function exportCsv(req: AuthRequest, res: Response) {
   if (typeof (res as any).flush === 'function') (res as any).flush();
 
   // Page 1 is already in hand from the probe above; later pages follow next_cursor.
-  let result: LinqSearchResult | null = firstPage;
+  let result: CarrierSearchResult | null = firstPage;
   let written = 0;
   let pagesRead = 1;
   while (written < maxRows) {
-    if (!result || (result.carriers || []).length === 0) break;
+    // A LINQ-scanned page can match nothing yet have more behind it; keep going.
+    if (!result || ((result.carriers || []).length === 0 && !result.hasMore)) break;
 
     const remaining = maxRows - written;
-    const rows: Array<Record<string, unknown>> = (result.carriers || [])
-      .filter(matches)
-      .slice(0, remaining)
-      .map((c) => ({ ...rowFromCarrier(c), phone: '', email: '' }));
+    const pageCarriers = (result.carriers || []).slice(0, remaining);
+    const rows: Array<Record<string, unknown>> = pageCarriers.map((c) => ({ ...rowFromCarrier(c), phone: '', email: '' }));
 
-    // Census first — one query for the page, and the same numbers the table shows.
-    // The provider is only asked about the rows it leaves incomplete.
-    const census = await fmcsaLeadsService.contactsFor(rows.map((row) => String(row.dot_number)));
-    const gapRows = rows.filter((row) => {
-      const hit = census.get(String(row.dot_number));
-      return !hit?.phone || !hit?.email;
-    });
+    // Census first — one query for the page (none when the rows came from the
+    // census), and the same numbers the table shows. LINQ's profile is a copy of
+    // the census row, so it's only asked about carriers the census lacks.
+    const census =
+      result.source === 'census'
+        ? new Map(pageCarriers.map((c) => [String(c.dot_number), { phone: c.phone ?? null, email: c.email ?? null }]))
+        : await fmcsaLeadsService.contactsFor(rows.map((row) => String(row.dot_number)));
+    const gapRows = rows.filter((row) => !census.has(String(row.dot_number)));
     const fromProvider = await mapLimit(gapRows, 12, async (row) => {
       try {
         const d = (await morproLinqService.getCarrier(String(row.dot_number))) as any;
@@ -659,13 +663,12 @@ export async function exportCsv(req: AuthRequest, res: Response) {
     if (typeof (res as any).flush === 'function') (res as any).flush();
     written += rows.length;
 
-    if (!result.has_more || result.next_cursor == null || pagesRead++ >= maxScanPages) break;
+    if (!result.hasMore || result.nextCursor == null || pagesRead++ >= maxScanPages) break;
     try {
-      result = await morproLinqService.searchCarriers({
-        ...brokerFilters,
-        limit: pageSize,
-        cursor: result.next_cursor,
-      });
+      result = await carrierSearch.searchCarriers(
+        { ...baseFilters, limit: pageSize, cursor: result.nextCursor },
+        { minRows: pageSize }
+      );
     } catch {
       // Headers already sent — can't switch to an error status. Stop with a partial file.
       break;
