@@ -112,6 +112,7 @@ const SECTION_TIMEOUT_MS = 3000;
 // section carries dot_number, so its absence means the section never arrived.
 const CORE_SECTIONS = ['authority', 'safety', 'insurance'] as const;
 const CORE_REFETCH_MARKER = '_coreRefetched';
+const CORE_REFETCH_INTERVAL_MS = 60 * 60 * 1000;
 const missingCore = (report: any) => CORE_SECTIONS.some((s) => report?.[s]?.dot_number == null);
 
 class CarrierDataService {
@@ -250,8 +251,12 @@ class CarrierDataService {
       // Poisoned entry written before not-found bodies were rejected — drop it.
       logger.warn(`Discarding cached not-found report for DOT ${dotNumber}`);
       await cacheService.invalidateCarrierReport(dotNumber);
-    } else if (cached && missingCore(cached) && !(cached as any)[CORE_REFETCH_MARKER]) {
-      // A core section timed out when this was cached — fetch fresh once.
+    } else if (
+      cached &&
+      missingCore(cached) &&
+      Date.now() - Number((cached as any)[CORE_REFETCH_MARKER] || 0) > CORE_REFETCH_INTERVAL_MS
+    ) {
+      // A core section timed out when this was cached — fetch fresh (at most hourly).
       logger.warn(`Cached report for DOT ${dotNumber} lacks a core section — refetching`);
       await cacheService.invalidateCarrierReport(dotNumber);
     } else if (cached) {
@@ -289,8 +294,8 @@ class CarrierDataService {
 
       if (result.kind === 'ok') {
         if (up.name === 'linq') result.report = normalizeLinqReport(result.report);
-        // Don't refetch on every read when LINQ genuinely lacks a section.
-        if (missingCore(result.report)) (result.report as any)[CORE_REFETCH_MARKER] = true;
+        // Retry hourly, not on every read, when a section is still missing.
+        if (missingCore(result.report)) (result.report as any)[CORE_REFETCH_MARKER] = Date.now();
         await this.applyFmcsaSafetyData(result.report, dotNumber);
         await cacheService.cacheCarrierReport(dotNumber, result.report);
         applyFmcsaRegistry(result.report);
