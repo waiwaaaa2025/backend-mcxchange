@@ -73,7 +73,12 @@ const BASICS: Record<Basic, BasicDef> = {
   },
 };
 
-const VEHICLE_LEVELS = new Set(['1', '2', '4', '5', '6']);
+const ALL_BASIC_NAMES = [
+  'Unsafe Driving', 'Hours-of-Service Compliance', 'Driver Fitness', 'Controlled Substances/Alcohol',
+  'Vehicle Maintenance', 'Hazardous Materials Compliance', 'Crash Indicator',
+];
+
+const VEHICLE_LEVELS =new Set(['1', '2', '4', '5', '6']);
 const DRIVER_LEVELS = new Set(['1', '2', '3', '6']);
 
 const num = (v: unknown) => {
@@ -267,8 +272,20 @@ export async function estimateBasicPercentiles(dotNumber: string): Promise<Parti
  * percentiles are never overwritten.
  */
 export async function applyBasicPercentiles(report: any, dotNumber: string): Promise<boolean> {
-  const scores: any[] = report?.safety?.basicScores;
-  if (!Array.isArray(scores) || report[PERCENTILE_MARKER] !== undefined) return false;
+  if (!report || report[PERCENTILE_MARKER] !== undefined) return false;
+  // LINQ omits the safety section for some carriers; give them the 7 BASIC rows
+  // (same shape as linqReportNormalizer) so FMCSA estimates have somewhere to go.
+  report.safety = report.safety || {};
+  if (!Array.isArray(report.safety.basicScores) || report.safety.basicScores.length === 0) {
+    report.safety.basicScores = ALL_BASIC_NAMES.map((name) => ({
+      name,
+      score: null,
+      threshold: /Unsafe|Hours|Crash/i.test(name) ? 65 : 80,
+      alert: false,
+      description: '',
+    }));
+  }
+  const scores: any[] = report.safety.basicScores;
   if (scores.some((b) => b.score != null)) {
     report[PERCENTILE_MARKER] = false;
     return false;
