@@ -69,9 +69,11 @@ function normalizeCarrier(c: any, auth: any, fleet: any): any {
       .find((d) => d.prefix === 'MC' && d.num)?.num ??
     (/^MC(\d+)$/.exec(String(auth?.docket_number || ''))?.[1] || null);
 
-  const anyActiveAuthority = [auth?.common_authority, auth?.contract_authority, auth?.broker_authority].some(
-    (s) => authStatus(s) === 'ACTIVE'
-  );
+  // LINQ omits the authority section for some carriers (DOT 3156784); the
+  // census docket status codes still say whether an authority is active.
+  const anyActiveAuthority = auth
+    ? [auth.common_authority, auth.contract_authority, auth.broker_authority].some((s) => authStatus(s) === 'ACTIVE')
+    : [1, 2, 3].some((i) => oa[`docket${i}`] && String(oa[`docket${i}_status_code`] || '').toUpperCase() === 'A');
   const isActive = String(c.status_code || '').toUpperCase() === 'A';
 
   const registered = linqDate(c.add_date);
@@ -204,10 +206,9 @@ function normalizeDocuments(d: any, carrier: any): any {
  * raw LINQ fields are kept, so an already-normalized report maps to the same.
  */
 export function normalizeLinqReport(r: MorProCarrierReport): MorProCarrierReport {
-  const authority = r.authority || {};
   return {
     ...r,
-    carrier: r.carrier ? normalizeCarrier(r.carrier, authority, r.fleet) : r.carrier,
+    carrier: r.carrier ? normalizeCarrier(r.carrier, r.authority, r.fleet) : r.carrier,
     authority: r.authority ? normalizeAuthority(r.authority) : r.authority,
     safety: r.safety ? normalizeSafety(r.safety) : r.safety,
     inspections: r.inspections
