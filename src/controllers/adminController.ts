@@ -1,4 +1,5 @@
 import { Response } from 'express';
+import { syncIdentityNames, applyIdNameToAccount, buildNameCheck } from '../services/identityNameService';
 import { body } from 'express-validator';
 import { adminService } from '../services/adminService';
 import { asyncHandler, NotFoundError, BadRequestError } from '../middleware/errorHandler';
@@ -924,6 +925,42 @@ export const getOpenStripeDisputes = asyncHandler(async (_req: AuthRequest, res:
     })
     .sort((a, b) => (a.dueBy ?? Infinity) - (b.dueBy ?? Infinity));
   res.json({ success: true, data: enriched });
+});
+
+// Account name vs name on government ID (Stripe Identity) vs cardholder
+// name(s). Re-pulls both from Stripe so the admin always sees live data.
+export const getUserNameCheck = asyncHandler(async (req: AuthRequest, res: Response) => {
+  const user: any = await User.findByPk(req.params.id);
+  if (!user) {
+    res.status(404).json({ success: false, error: 'User not found' });
+    return;
+  }
+  const check = await syncIdentityNames(user);
+  res.json({ success: true, data: check });
+});
+
+// Replace the account name with the name read off the user's ID.
+export const applyUserIdName = asyncHandler(async (req: AuthRequest, res: Response) => {
+  try {
+    const check = await applyIdNameToAccount(req.params.id);
+    res.json({ success: true, data: check, message: 'Account name updated to match ID' });
+  } catch (e) {
+    res.status(400).json({ success: false, error: (e as Error).message });
+  }
+});
+
+// Every ID-verified user with their three names and match flags (from DB;
+// kept fresh by the verification webhook + scripts/syncIdentityNames).
+export const getIdentityNameReport = asyncHandler(async (_req: AuthRequest, res: Response) => {
+  const users: any[] = await User.findAll({
+    where: { identityVerified: true },
+    attributes: ['id', 'email', 'name', 'role', 'identityVerifiedAt', 'identityFirstName', 'identityLastName', 'cardholderName'],
+    order: [['identityVerifiedAt', 'DESC']],
+  });
+  res.json({
+    success: true,
+    data: users.map((u) => ({ id: u.id, email: u.email, role: u.role, identityVerifiedAt: u.identityVerifiedAt, ...buildNameCheck(u) })),
+  });
 });
 
 // Download a full dispute-evidence PDF for any user (account + subscription +

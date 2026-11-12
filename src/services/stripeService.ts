@@ -2109,6 +2109,40 @@ class StripeService {
     }
   }
 
+  /**
+   * Legal name read off the government ID by Stripe Identity. Stripe only
+   * returns verified_outputs when explicitly expanded.
+   */
+  async getVerifiedIdentityName(sessionId: string): Promise<{ firstName: string | null; lastName: string | null } | null> {
+    if (!stripe || !sessionId) return null;
+    const session = await (stripe as any).identity.verificationSessions.retrieve(sessionId, {
+      expand: ['verified_outputs'],
+    });
+    const out = session?.verified_outputs;
+    if (!out) return null;
+    return { firstName: out.first_name || null, lastName: out.last_name || null };
+  }
+
+  /**
+   * Distinct cardholder names for a customer: names on saved cards plus the
+   * billing name recorded on each paid charge (Checkout collects it).
+   */
+  async getCardholderNames(customerId: string): Promise<string[]> {
+    if (!stripe || !customerId) return [];
+    const [pms, charges] = await Promise.all([
+      stripe.paymentMethods.list({ customer: customerId, type: 'card', limit: 100 }).catch(() => ({ data: [] as Stripe.PaymentMethod[] })),
+      stripe.charges.list({ customer: customerId, limit: 100 }).catch(() => ({ data: [] as Stripe.Charge[] })),
+    ]);
+    const seen = new Map<string, string>();
+    const add = (n?: string | null) => {
+      const v = String(n || '').trim().replace(/\s+/g, ' ');
+      if (v && !seen.has(v.toLowerCase())) seen.set(v.toLowerCase(), v);
+    };
+    charges.data.filter((c) => c.paid).forEach((c) => add(c.billing_details?.name));
+    pms.data.forEach((pm) => add(pm.billing_details?.name));
+    return Array.from(seen.values());
+  }
+
   // ============================================
   // Utility Methods
   // ============================================

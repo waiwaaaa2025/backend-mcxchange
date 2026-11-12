@@ -281,6 +281,9 @@ interface UserAttributes {
   identityVerifiedAt?: Date;
   stripeVerificationSessionId?: string;
   identityVerificationStatus?: string;
+  identityFirstName?: string;
+  identityLastName?: string;
+  cardholderName?: string;
   carrierPulseAccess: boolean;
   carrierPulseStripeSubId?: string;
   promoAccessType?: string;
@@ -290,7 +293,7 @@ interface UserAttributes {
   updatedAt?: Date;
 }
 
-interface UserCreationAttributes extends Optional<UserAttributes, 'id' | 'phone' | 'avatar' | 'status' | 'verified' | 'verifiedAt' | 'trustScore' | 'memberSince' | 'lastLoginAt' | 'companyName' | 'companyAddress' | 'city' | 'state' | 'zipCode' | 'ein' | 'mcNumber' | 'dotNumber' | 'sellerVerified' | 'sellerVerifiedAt' | 'totalCredits' | 'usedCredits' | 'stripeCustomerId' | 'stripeAccountId' | 'emailVerified' | 'identityVerified' | 'identityVerifiedAt' | 'stripeVerificationSessionId' | 'identityVerificationStatus' | 'carrierPulseAccess' | 'carrierPulseStripeSubId' | 'promoAccessType' | 'promoAccessExpiresAt' | 'trialEndsAt' | 'createdAt' | 'updatedAt'> {}
+interface UserCreationAttributes extends Optional<UserAttributes, 'id' | 'phone' | 'avatar' | 'status' | 'verified' | 'verifiedAt' | 'trustScore' | 'memberSince' | 'lastLoginAt' | 'companyName' | 'companyAddress' | 'city' | 'state' | 'zipCode' | 'ein' | 'mcNumber' | 'dotNumber' | 'sellerVerified' | 'sellerVerifiedAt' | 'totalCredits' | 'usedCredits' | 'stripeCustomerId' | 'stripeAccountId' | 'emailVerified' | 'identityVerified' | 'identityVerifiedAt' | 'stripeVerificationSessionId' | 'identityVerificationStatus' | 'identityFirstName' | 'identityLastName' | 'cardholderName' | 'carrierPulseAccess' | 'carrierPulseStripeSubId' | 'promoAccessType' | 'promoAccessExpiresAt' | 'trialEndsAt' | 'createdAt' | 'updatedAt'> {}
 
 // ==================== USER MODEL ====================
 
@@ -327,6 +330,9 @@ export class User extends Model<UserAttributes, UserCreationAttributes> implemen
   declare identityVerifiedAt: Date | undefined;
   declare stripeVerificationSessionId: string | undefined;
   declare identityVerificationStatus: string | undefined;
+  declare identityFirstName: string | undefined;
+  declare identityLastName: string | undefined;
+  declare cardholderName: string | undefined;
   declare carrierPulseAccess: boolean;
   declare carrierPulseStripeSubId: string | undefined;
   declare promoAccessType: string | undefined;
@@ -472,6 +478,18 @@ User.init(
     },
     identityVerificationStatus: {
       type: DataTypes.STRING(50),
+      allowNull: true,
+    },
+    identityFirstName: {
+      type: DataTypes.STRING(100),
+      allowNull: true,
+    },
+    identityLastName: {
+      type: DataTypes.STRING(100),
+      allowNull: true,
+    },
+    cardholderName: {
+      type: DataTypes.STRING(255),
       allowNull: true,
     },
     carrierPulseAccess: {

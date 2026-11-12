@@ -1,4 +1,5 @@
 import { Response } from 'express';
+import { syncIdentityNames } from '../services/identityNameService';
 import { AuthRequest } from '../types';
 import { User } from '../models';
 import { stripeService } from '../services/stripeService';
@@ -116,7 +117,7 @@ export const getVerificationStatus = async (req: AuthRequest, res: Response): Pr
     }
 
     const user = await User.findByPk(req.user.id, {
-      attributes: ['id', 'identityVerified', 'identityVerifiedAt', 'identityVerificationStatus', 'stripeVerificationSessionId'],
+      attributes: ['id', 'identityVerified', 'identityVerifiedAt', 'identityVerificationStatus', 'stripeVerificationSessionId', 'stripeCustomerId'],
     });
 
     if (!user) {
@@ -154,6 +155,9 @@ export const getVerificationStatus = async (req: AuthRequest, res: Response): Pr
           }
 
           await user.update(updateData);
+          if (stripeStatus === 'verified') {
+            syncIdentityNames(user).catch(() => {}); // don't hold up the status poll
+          }
         }
 
         res.json({

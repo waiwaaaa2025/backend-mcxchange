@@ -9,6 +9,7 @@ import {
   UserAccessLog,
 } from '../models';
 import { stripeService } from './stripeService';
+import { syncIdentityNames, NameCheck } from './identityNameService';
 import { NotFoundError } from '../middleware/errorHandler';
 import logger from '../utils/logger';
 import { REGISTER_CONSENT, CHECKOUT_CONSENT, PAYMENT_TERMS_ARTICLE_7, TERMS_OF_SERVICE_URL } from '../constants/legal';
@@ -26,6 +27,19 @@ function money(amount?: number | null, currency?: string | null): string {
   return `$${(amount / 100).toFixed(2)} ${String(currency || '').toUpperCase()}`;
 }
 
+function yn(v: boolean | null): string {
+  return v === null ? 'n/a' : v ? 'MATCH' : 'does not match';
+}
+
+/** One-line identity statement for the issuer, strongest claim first. */
+function identityStatement(user: any, nc: NameCheck): string | null {
+  if (!user.identityVerified || !nc.idName) return null;
+  const parts = [`Government ID verified by Stripe Identity (document + matching live selfie) on ${fmt(user.identityVerifiedAt)}; legal name on the ID: ${nc.idName}.`];
+  if (nc.cardholderName) parts.push(`Cardholder name on the card used: ${nc.cardholderName} (${yn(nc.cardMatchesId)} the ID).`);
+  parts.push(`Account name: ${nc.accountName || '—'} (${yn(nc.idMatchesAccount)} the ID).`);
+  return parts.join(' ');
+}
+
 class DisputeEvidenceService {
   /**
    * Build a dispute-evidence PDF for any user: account, subscription, real Stripe charges
@@ -34,6 +48,7 @@ class DisputeEvidenceService {
   async buildEvidencePdf(userId: string): Promise<{ buffer: Buffer; filename: string }> {
     const user = await User.findByPk(userId);
     if (!user) throw new NotFoundError('User');
+    const nameCheck = await syncIdentityNames(user);
 
     const [subscription, ledger, unlocked, terms, paymentConsents, accessLog] = await Promise.all([
       Subscription.findOne({ where: { userId } }),
@@ -70,7 +85,7 @@ class DisputeEvidenceService {
       .map((s: any) => ({ id: s.id, created: s.created }))
       .sort((a: any, b: any) => (b.created || 0) - (a.created || 0));
 
-    const buffer = await this.renderPdf({ user, subscription, ledger, unlocked, listingById, terms, paymentConsents, stripeTosAcceptances, accessLog, stripe: stripeData });
+    const buffer = await this.renderPdf({ user, nameCheck, subscription, ledger, unlocked, listingById, terms, paymentConsents, stripeTosAcceptances, accessLog, stripe: stripeData });
     const safeName = String((user as any).name || 'user').replace(/[^a-z0-9]+/gi, '-').toLowerCase();
     return { buffer, filename: `dispute-evidence-${safeName}-${userId}.pdf` };
   }
@@ -150,6 +165,7 @@ class DisputeEvidenceService {
   }> {
     const user: any = await User.findByPk(userId);
     if (!user) throw new NotFoundError('User');
+    const nameCheck = await syncIdentityNames(user);
 
     const [subscription, unlocked, terms, paymentConsents, accessLog] = await Promise.all([
       Subscription.findOne({ where: { userId } }),
@@ -272,7 +288,7 @@ class DisputeEvidenceService {
       `Service consumed: ${(unlocked as any[]).length} carrier contact record(s) unlocked.`,
       `Terms accepted at signup: ${(terms as any[])[0] ? `${fmt((terms as any[])[0].acceptedAt)} from IP ${(terms as any[])[0].ipAddress || 'n/a'}` : 'mandatory checkbox (signature capture postdates this account)'}.`,
       `Payment terms signed at checkout: ${(paymentConsents as any[])[0] ? `${fmt((paymentConsents as any[])[0].acceptedAt)} from IP ${(paymentConsents as any[])[0].ipAddress || 'n/a'}` : 'signature capture postdates this charge; signup acceptance applies'}.`,
-      `Stripe Identity verified: ${user.identityVerified ? 'yes' : 'no'}.`,
+      identityStatement(user, nameCheck) || `Stripe Identity verified: ${user.identityVerified ? 'yes' : 'no'}.`,
     ];
     const uncategorizedText = clip(
       [
@@ -358,7 +374,7 @@ class DisputeEvidenceService {
     return new Promise(async (resolve, reject) => {
       try {
         const PDFDocument = (await import('pdfkit')).default;
-        const { user, subscription, ledger, unlocked, listingById, terms, paymentConsents, stripeTosAcceptances, accessLog, stripe } = data;
+        const { user, nameCheck, subscription, ledger, unlocked, listingById, terms, paymentConsents, stripeTosAcceptances, accessLog, stripe } = data;
 
         const doc = new PDFDocument({ margin: 50, size: 'LETTER' });
         const chunks: Buffer[] = [];
@@ -383,7 +399,16 @@ class DisputeEvidenceService {
         KV('Stripe Customer', user.stripeCustomerId);
         KV('Account created', fmt(user.memberSince || user.createdAt));
         KV('Last login', fmt(user.lastLoginAt));
-        KV('Identity verified', user.identityVerified ? 'Yes' : 'No');
+        KV('Identity verified', user.identityVerified ? `Yes — Stripe Identity, government ID + matching selfie, ${fmt(user.identityVerifiedAt)}` : 'No');
+        if (nameCheck?.idName) {
+          KV('Legal name on government ID', nameCheck.idName);
+          KV('Account name vs ID', yn(nameCheck.idMatchesAccount));
+        }
+        if (nameCheck?.cardholderName) {
+          KV('Cardholder name on card', nameCheck.cardholderName);
+          if (nameCheck.idName) KV('Cardholder name vs ID', yn(nameCheck.cardMatchesId));
+          else KV('Cardholder name vs account', yn(nameCheck.cardMatchesAccount));
+        }
 
         // 2. Subscription
         H('2. Subscription');
@@ -542,7 +567,7 @@ class DisputeEvidenceService {
           P('The chargeback is filed as "fraudulent" (unauthorized). The records show the transaction was authorized and used by the legitimate account holder:');
           doc.moveDown(0.2);
           [
-            `Identity verified via Stripe Identity: ${user.identityVerified ? 'YES' : 'no'}.`,
+            identityStatement(user, nameCheck) || `Identity verified via Stripe Identity: ${user.identityVerified ? 'YES' : 'no'}.`,
             `Account created ${fmt(user.memberSince || user.createdAt)}, last login ${fmt(user.lastLoginAt)}.`,
             `The same card was billed and paid for multiple months before any dispute — inconsistent with an unauthorized charge.`,
             `The account consumed the paid service, unlocking ${unlocked.length} carrier contact record(s) (see §3).`,

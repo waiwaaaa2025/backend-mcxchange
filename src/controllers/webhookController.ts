@@ -1,4 +1,5 @@
 import { equipmentOrderService } from '../services/equipmentOrderService';
+import { syncIdentityNames } from '../services/identityNameService';
 import { Request, Response } from 'express';
 import Stripe from 'stripe';
 import { stripeService } from '../services/stripeService';
@@ -1218,6 +1219,9 @@ async function handleIdentityVerified(session: any): Promise<void> {
     sessionId: session.id,
     newTrustScore,
   });
+
+  // Save the legal name from the ID + cardholder name for admin name matching.
+  await syncIdentityNames(user, { sessionId: session.id });
 
   const isSeller = user.role === UserRole.SELLER;
 

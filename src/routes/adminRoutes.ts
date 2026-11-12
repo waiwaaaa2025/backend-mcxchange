@@ -53,6 +53,9 @@ import {
   recordManualDepositValidation,
   getUserListingsForDeposit,
   getUserDisputeEvidence,
+  getUserNameCheck,
+  applyUserIdName,
+  getIdentityNameReport,
   getUserDisputeEvidenceFields,
   getTermsOfServicePdf,
   exportUserEmails,
@@ -116,6 +119,7 @@ router.post('/listings/:id/approve', approveListing);
 router.post('/listings/:id/reject', validate(rejectListingValidation), rejectListing);
 
 // Users
+router.get('/identity-name-report', getIdentityNameReport);
 router.get('/users', getUsers);
 router.post('/users', validate(createUserValidation), createUser);
 router.post('/users/with-listing', createUserWithListing);
@@ -135,6 +139,8 @@ router.post('/users/:id/verify-seller', verifySeller);
 router.post('/users/:id/credits', validate(adjustCreditsValidation), adjustUserCredits);
 router.get('/users/:id/listings-for-deposit', getUserListingsForDeposit);
 router.get('/users/:id/dispute-evidence', getUserDisputeEvidence);
+router.get('/users/:id/name-check', getUserNameCheck);
+router.post('/users/:id/apply-id-name', applyUserIdName);
 router.get('/users/:id/dispute-evidence-fields', getUserDisputeEvidenceFields);
 router.get('/terms-of-service.pdf', getTermsOfServicePdf);
 router.get('/user-emails.csv', exportUserEmails);

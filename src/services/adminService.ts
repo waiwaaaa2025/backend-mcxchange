@@ -1,4 +1,5 @@
 import type { TruckInput } from './truckService';
+import { buildNameCheck } from './identityNameService';
 import { assessClient, withGeo } from './scrapeWatchService';
 import { Op, QueryTypes } from 'sequelize';
 import { publicListingTitle, scrubIdentity } from '../utils/listingSanitize';
@@ -355,6 +356,9 @@ class AdminService {
         'identityVerified',
         'identityVerificationStatus',
         'identityVerifiedAt',
+        'identityFirstName',
+        'identityLastName',
+        'cardholderName',
       ],
       include: [subscriptionInclude],
     });
@@ -405,6 +409,7 @@ class AdminService {
 
     const usersWithCounts = users.map(user => ({
       ...user.toJSON(),
+      nameCheck: buildNameCheck(user),
       _count: statsMap.get(user.id) || {
         listings: 0,
         sentOffers: 0,
@@ -463,6 +468,7 @@ class AdminService {
 
     return {
       ...user.toJSON(),
+      nameCheck: buildNameCheck(user),
       listings,
       sentOffers,
       receivedOffers,
