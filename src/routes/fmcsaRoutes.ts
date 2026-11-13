@@ -10,9 +10,22 @@ import {
   getCargoCarried,
 } from '../controllers/fmcsaController';
 import { optionalAuth } from '../middleware/auth';
+import { lookupRegulations } from '../services/cfrRegulationService';
 import { anonymousCarrierDataLimiter, anonymousLookupLimiter, fmcsaLimiter } from '../middleware/rateLimiter';
 
 const router = Router();
+
+// Regulation text (49 CFR, via eCFR) for FMCSA violation codes — public law, so
+// no auth; the FMCSA limiter keeps it from being used as an eCFR proxy.
+router.get('/regulations', fmcsaLimiter, async (req, res) => {
+  const codes = String(req.query.codes || '').split(',').map((c) => c.trim()).filter(Boolean).slice(0, 60);
+  if (codes.length === 0) return res.json({ success: true, data: {} });
+  try {
+    res.json({ success: true, data: await lookupRegulations(codes) });
+  } catch {
+    res.status(502).json({ success: false, error: 'Regulation lookup unavailable' });
+  }
+});
 
 // Public lookups by MC — the home page, product page and pricing estimator use
 // these before signup. Anonymous callers are held to a few per hour so they
