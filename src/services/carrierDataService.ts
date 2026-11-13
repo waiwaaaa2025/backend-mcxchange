@@ -1,5 +1,6 @@
 import { config } from '../config';
 import { applyFmcsaSafetyFallback, FALLBACK_MARKER } from './fmcsaSafetyFallback';
+import { applyViolationDetail, VIOLATION_DETAIL_MARKER } from './fmcsaViolationDetail';
 import { applyBasicPercentiles, PERCENTILE_MARKER } from './basicPercentileService';
 import { reportFromSafer } from './linqSaferReport';
 import {
@@ -282,6 +283,10 @@ class CarrierDataService {
     await applyFmcsaSafetyFallback(report, dotNumber).catch((err) =>
       logger.warn(`FMCSA safety fallback failed for DOT ${dotNumber}: ${(err as Error).message}`)
     );
+    // After the fallback, so inspections it filled get their cited violations too.
+    await applyViolationDetail(report, dotNumber).catch((err) =>
+      logger.warn(`FMCSA violation detail failed for DOT ${dotNumber}: ${(err as Error).message}`)
+    );
     await applyBasicPercentiles(report, dotNumber).catch((err) =>
       logger.warn(`BASIC percentile estimate failed for DOT ${dotNumber}: ${(err as Error).message}`)
     );
@@ -312,7 +317,7 @@ class CarrierDataService {
       const report = cached.carrier?.legal_name !== undefined ? normalizeLinqReport(cached) : cached;
       // Entries cached before the FMCSA fallbacks existed get them once.
       const r = report as any;
-      const markers = [FALLBACK_MARKER, PERCENTILE_MARKER, REGISTRY_MARKER];
+      const markers = [FALLBACK_MARKER, VIOLATION_DETAIL_MARKER, PERCENTILE_MARKER, REGISTRY_MARKER];
       if (markers.some((m) => r[m] === undefined)) {
         const before = markers.filter((m) => r[m] !== undefined).length;
         await this.applyFmcsaSafetyData(report, dotNumber);
