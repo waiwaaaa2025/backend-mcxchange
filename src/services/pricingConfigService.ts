@@ -44,7 +44,7 @@ export interface PricingConfig {
 // Default pricing values
 const DATAQ_FEATURE = 'DataQ included — DataQs violation challenges';
 
-// Starter, Premium and Enterprise include DataQ. Feature lists saved in
+// Starter, Premium, Enterprise and the VIP pass include DataQ. Feature lists saved in
 // platform_settings predate it, so add the line after CarrierPulse when missing.
 function withDataQ(features: string[]): string[] {
   if (!Array.isArray(features) || features.some((f) => /dataq/i.test(String(f)))) return features;
@@ -117,6 +117,7 @@ const DEFAULT_PRICING: PricingConfig = {
       features: [
         'Unlimited listing unlocks until purchase',
         'CarrierPulse included',
+        'DataQ included — DataQs violation challenges',
         '20 company credit reports per month',
         '$399.99 credited toward your final MC purchase',
         'Admin full support',
@@ -343,7 +344,7 @@ class PricingConfigService {
           priceYearly: this.parseNumber(settingsMap['vip_access_price_yearly'], DEFAULT_PRICING.subscriptionPlans.vip_access.priceYearly),
           stripePriceIdMonthly: settingsMap['vip_access_stripe_monthly'] || DEFAULT_PRICING.subscriptionPlans.vip_access.stripePriceIdMonthly,
           stripePriceIdYearly: settingsMap['vip_access_stripe_yearly'] || DEFAULT_PRICING.subscriptionPlans.vip_access.stripePriceIdYearly,
-          features: this.parseJson(settingsMap['vip_access_features'], DEFAULT_PRICING.subscriptionPlans.vip_access.features),
+          features: withDataQ(this.parseJson(settingsMap['vip_access_features'], DEFAULT_PRICING.subscriptionPlans.vip_access.features)),
         },
         lead_generator_buyer: {
           name: DEFAULT_PRICING.subscriptionPlans.lead_generator_buyer.name,
