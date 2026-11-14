@@ -302,13 +302,13 @@ export const createSubscriptionCheckout = asyncHandler(async (req: AuthRequest, 
   });
 });
 
-// Check DataQ / Chameleon Check access for the current user (includes the
+// Check CarrierPulse / Chameleon Check access for the current user (includes the
 // limited-time free tools promo)
 export const getCarrierPulseAccess = asyncHandler(async (req: AuthRequest, res: Response) => {
   await sendToolAccess(req, res, true);
 });
 
-// Insurance Leads access — same entitlement as DataQ but NOT part of the free tools promo
+// Insurance Leads access — same entitlement as CarrierPulse but NOT part of the free tools promo
 export const getInsuranceLeadsAccess = asyncHandler(async (req: AuthRequest, res: Response) => {
   await sendToolAccess(req, res, false);
 });
@@ -325,13 +325,13 @@ async function sendToolAccess(req: AuthRequest, res: Response, includeFreePromo:
   const plan = subscription?.plan?.toUpperCase();
   const isActive = subscription?.status === SubscriptionStatus.ACTIVE;
 
-  // DataQ is included with any active subscription
+  // CarrierPulse is included with any active subscription
   const includedInPlan = isActive;
 
-  // Standalone DataQ access (legacy: purchased separately before bundling)
+  // Standalone CarrierPulse access (legacy: purchased separately before bundling)
   const hasStandaloneAccess = user?.carrierPulseAccess || false;
 
-  // Buyer's-Guide 60-day bundle includes DataQ access for the promo window
+  // Buyer's-Guide 60-day bundle includes CarrierPulse access for the promo window
   const bundlePromo = hasActiveBundlePromo(user);
 
   // Limited-time free access for everyone signed in
@@ -368,7 +368,7 @@ async function sendToolAccess(req: AuthRequest, res: Response, includeFreePromo:
   });
 }
 
-// Create DataQ checkout session ($19.99/mo standalone or add-on for Starter)
+// Create CarrierPulse checkout session ($19.99/mo standalone or add-on for Starter)
 export const createCarrierPulseCheckout = asyncHandler(async (req: AuthRequest, res: Response) => {
   if (!req.user) {
     res.status(401).json({ success: false, error: 'Not authenticated' });
@@ -378,18 +378,18 @@ export const createCarrierPulseCheckout = asyncHandler(async (req: AuthRequest, 
   // Require an affirmative payment-terms signature before paid checkout.
   const signatureName = requireSignature(req.body?.signature);
 
-  // Check if user already has DataQ access
+  // Check if user already has CarrierPulse access
   const user = await User.findByPk(req.user.id);
   const subscription = await Subscription.findOne({ where: { userId: req.user.id } });
   const isActive = subscription?.status === SubscriptionStatus.ACTIVE;
 
   if (user?.carrierPulseAccess) {
-    res.json({ success: false, error: 'You already have DataQ access' });
+    res.json({ success: false, error: 'You already have CarrierPulse access' });
     return;
   }
 
   if (isActive) {
-    res.json({ success: false, error: 'DataQ is already included in your subscription' });
+    res.json({ success: false, error: 'CarrierPulse is already included in your subscription' });
     return;
   }
 
@@ -848,14 +848,14 @@ export const acceptTerms = asyncHandler(async (req: AuthRequest, res: Response) 
   });
 });
 
-// DataQ Creditsafe: Search by company name (requires DataQ access)
+// CarrierPulse Creditsafe: Search by company name (requires CarrierPulse access)
 export const getCarrierPulseCreditsafeSearch = asyncHandler(async (req: AuthRequest, res: Response) => {
   if (!req.user) {
     res.status(401).json({ success: false, error: 'Not authenticated' });
     return;
   }
 
-  // Check DataQ access — included with any active subscription or 60-day bundle promo
+  // Check CarrierPulse access — included with any active subscription or 60-day bundle promo
   const user = await User.findByPk(req.user.id);
   const subscription = await Subscription.findOne({ where: { userId: req.user.id } });
   const isActive = subscription?.status === SubscriptionStatus.ACTIVE;
@@ -866,7 +866,7 @@ export const getCarrierPulseCreditsafeSearch = asyncHandler(async (req: AuthRequ
     hasActiveBundlePromo(user);
 
   if (!hasAccess) {
-    res.status(403).json({ success: false, error: 'DataQ access required' });
+    res.status(403).json({ success: false, error: 'CarrierPulse access required' });
     return;
   }
 
@@ -892,14 +892,14 @@ export const getCarrierPulseCreditsafeSearch = asyncHandler(async (req: AuthRequ
   });
 });
 
-// DataQ Creditsafe: Get full credit report (requires DataQ access)
+// CarrierPulse Creditsafe: Get full credit report (requires CarrierPulse access)
 export const getCarrierPulseCreditsafeReport = asyncHandler(async (req: AuthRequest, res: Response) => {
   if (!req.user) {
     res.status(401).json({ success: false, error: 'Not authenticated' });
     return;
   }
 
-  // Check DataQ access — included with any active subscription or 60-day bundle promo
+  // Check CarrierPulse access — included with any active subscription or 60-day bundle promo
   const user = await User.findByPk(req.user.id);
   const subscription = await Subscription.findOne({ where: { userId: req.user.id } });
   const isActive = subscription?.status === SubscriptionStatus.ACTIVE;
@@ -910,7 +910,7 @@ export const getCarrierPulseCreditsafeReport = asyncHandler(async (req: AuthRequ
     hasActiveBundlePromo(user);
 
   if (!hasAccess) {
-    res.status(403).json({ success: false, error: 'DataQ access required' });
+    res.status(403).json({ success: false, error: 'CarrierPulse access required' });
     return;
   }
 
@@ -920,7 +920,7 @@ export const getCarrierPulseCreditsafeReport = asyncHandler(async (req: AuthRequ
   res.json({ success: true, data: report });
 });
 
-// Shared access gate — Pending Insurance Leads uses the same entitlement as DataQ
+// Shared access gate — Pending Insurance Leads uses the same entitlement as CarrierPulse
 // (any active subscription, standalone access, 60-day bundle promo, or admin).
 async function hasCarrierPulseAccess(userId: string, role: UserRole): Promise<boolean> {
   const user = await User.findByPk(userId);
@@ -942,7 +942,7 @@ export const getInsuranceLeads = asyncHandler(async (req: AuthRequest, res: Resp
   }
 
   if (!(await hasCarrierPulseAccess(req.user.id, req.user.role))) {
-    res.status(403).json({ success: false, error: 'DataQ access required', code: 'CARRIER_PULSE_REQUIRED' });
+    res.status(403).json({ success: false, error: 'CarrierPulse access required', code: 'CARRIER_PULSE_REQUIRED' });
     return;
   }
 
@@ -985,7 +985,7 @@ export const requestBrokerOutreach = asyncHandler(async (req: AuthRequest, res: 
   }
 
   if (!(await hasCarrierPulseAccess(req.user.id, req.user.role))) {
-    res.status(403).json({ success: false, error: 'DataQ access required', code: 'CARRIER_PULSE_REQUIRED' });
+    res.status(403).json({ success: false, error: 'CarrierPulse access required', code: 'CARRIER_PULSE_REQUIRED' });
     return;
   }
 
