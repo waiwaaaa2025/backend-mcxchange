@@ -42,6 +42,18 @@ export interface PricingConfig {
 }
 
 // Default pricing values
+const DATAQ_FEATURE = 'DataQ included — DataQs violation challenges';
+
+// Starter, Premium and Enterprise include DataQ. Feature lists saved in
+// platform_settings predate it, so add the line after CarrierPulse when missing.
+function withDataQ(features: string[]): string[] {
+  if (!Array.isArray(features) || features.some((f) => /dataq/i.test(String(f)))) return features;
+  const i = features.findIndex((f) => /carrier ?pulse/i.test(String(f)));
+  const out = [...features];
+  out.splice(i >= 0 ? i + 1 : out.length, 0, DATAQ_FEATURE);
+  return out;
+}
+
 const DEFAULT_PRICING: PricingConfig = {
   subscriptionPlans: {
     starter: {
@@ -55,6 +67,7 @@ const DEFAULT_PRICING: PricingConfig = {
         '6 listing unlock credits per month',
         'Full marketplace access',
         'CarrierPulse included',
+        'DataQ included — DataQs violation challenges',
         'Standard support',
       ],
     },
@@ -69,6 +82,7 @@ const DEFAULT_PRICING: PricingConfig = {
         '10 listing unlock credits per month',
         'EVA AI Assistant',
         'CarrierPulse included',
+        'DataQ included — DataQs violation challenges',
         'Risk Checks',
         '5 Company Credit Reports per month',
         'UCC filings, tax liens, payment history & credit line',
@@ -88,6 +102,7 @@ const DEFAULT_PRICING: PricingConfig = {
         'Everything in Premium',
         'EVA AI Assistant',
         'CarrierPulse included',
+        'DataQ included — DataQs violation challenges',
         'Risk Checks',
         'Priority support',
       ],
@@ -301,7 +316,7 @@ class PricingConfigService {
           priceYearly: this.parseNumber(settingsMap['starter_price_yearly'], DEFAULT_PRICING.subscriptionPlans.starter.priceYearly),
           stripePriceIdMonthly: settingsMap['starter_stripe_monthly'] || DEFAULT_PRICING.subscriptionPlans.starter.stripePriceIdMonthly,
           stripePriceIdYearly: settingsMap['starter_stripe_yearly'] || DEFAULT_PRICING.subscriptionPlans.starter.stripePriceIdYearly,
-          features: this.parseJson(settingsMap['starter_features'], DEFAULT_PRICING.subscriptionPlans.starter.features),
+          features: withDataQ(this.parseJson(settingsMap['starter_features'], DEFAULT_PRICING.subscriptionPlans.starter.features)),
         },
         premium: {
           name: 'Premium',
@@ -310,7 +325,7 @@ class PricingConfigService {
           priceYearly: this.parseNumber(settingsMap['premium_price_yearly'], DEFAULT_PRICING.subscriptionPlans.premium.priceYearly),
           stripePriceIdMonthly: settingsMap['premium_stripe_monthly'] || DEFAULT_PRICING.subscriptionPlans.premium.stripePriceIdMonthly,
           stripePriceIdYearly: settingsMap['premium_stripe_yearly'] || DEFAULT_PRICING.subscriptionPlans.premium.stripePriceIdYearly,
-          features: this.parseJson(settingsMap['premium_features'], DEFAULT_PRICING.subscriptionPlans.premium.features),
+          features: withDataQ(this.parseJson(settingsMap['premium_features'], DEFAULT_PRICING.subscriptionPlans.premium.features)),
         },
         enterprise: {
           name: 'Enterprise',
@@ -319,7 +334,7 @@ class PricingConfigService {
           priceYearly: this.parseNumber(settingsMap['enterprise_price_yearly'], DEFAULT_PRICING.subscriptionPlans.enterprise.priceYearly),
           stripePriceIdMonthly: settingsMap['enterprise_stripe_monthly'] || DEFAULT_PRICING.subscriptionPlans.enterprise.stripePriceIdMonthly,
           stripePriceIdYearly: settingsMap['enterprise_stripe_yearly'] || DEFAULT_PRICING.subscriptionPlans.enterprise.stripePriceIdYearly,
-          features: this.parseJson(settingsMap['enterprise_features'], DEFAULT_PRICING.subscriptionPlans.enterprise.features),
+          features: withDataQ(this.parseJson(settingsMap['enterprise_features'], DEFAULT_PRICING.subscriptionPlans.enterprise.features)),
         },
         vip_access: {
           name: 'VIP / Deal Access Pass',
