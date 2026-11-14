@@ -54,7 +54,7 @@ const DEFAULT_PRICING: PricingConfig = {
       features: [
         '6 listing unlock credits per month',
         'Full marketplace access',
-        'CarrierPulse included',
+        'DataQ included',
         'Standard support',
       ],
     },
@@ -68,7 +68,7 @@ const DEFAULT_PRICING: PricingConfig = {
       features: [
         '10 listing unlock credits per month',
         'EVA AI Assistant',
-        'CarrierPulse included',
+        'DataQ included',
         'Risk Checks',
         '5 Company Credit Reports per month',
         'UCC filings, tax liens, payment history & credit line',
@@ -87,7 +87,7 @@ const DEFAULT_PRICING: PricingConfig = {
         '20 Company Credit Reports per month',
         'Everything in Premium',
         'EVA AI Assistant',
-        'CarrierPulse included',
+        'DataQ included',
         'Risk Checks',
         'Priority support',
       ],
@@ -101,7 +101,7 @@ const DEFAULT_PRICING: PricingConfig = {
       stripePriceIdYearly: process.env.STRIPE_PRICE_VIP_ACCESS_ONETIME || process.env.STRIPE_PRICE_VIP_ACCESS_YEARLY || '',
       features: [
         'Unlimited listing unlocks until purchase',
-        'CarrierPulse included',
+        'DataQ included',
         '20 company credit reports per month',
         '$399.99 credited toward your final MC purchase',
         'Admin full support',

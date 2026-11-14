@@ -309,7 +309,7 @@ async function handleSubscriptionCreated(subscription: Stripe.Subscription): Pro
     return;
   }
 
-  // CarrierPulse standalone subscription — mark access on user
+  // DataQ standalone subscription — mark access on user
   if (subscription.metadata?.type === 'carrier_pulse') {
     await User.update(
       { carrierPulseAccess: true, carrierPulseStripeSubId: subscription.id },
@@ -442,8 +442,8 @@ async function handleSubscriptionDeleted(subscription: Stripe.Subscription): Pro
     subscriptionId: subscription.id,
   });
 
-  // Standalone CarrierPulse subscription cancellation — revoke compliance access.
-  // CarrierPulse subs don't have a row in the Subscription table; they're tracked
+  // Standalone DataQ subscription cancellation — revoke compliance access.
+  // DataQ subs don't have a row in the Subscription table; they're tracked
   // via User.carrierPulseStripeSubId.
   const pulseUser = await User.findOne({
     where: { carrierPulseStripeSubId: subscription.id },
@@ -458,8 +458,8 @@ async function handleSubscriptionDeleted(subscription: Stripe.Subscription): Pro
     await notificationService.create({
       userId: pulseUser.id,
       type: 'PAYMENT' as any,
-      title: 'CarrierPulse Cancelled',
-      message: 'Your CarrierPulse subscription has been cancelled. Compliance access has been removed.',
+      title: 'DataQ Cancelled',
+      message: 'Your DataQ subscription has been cancelled. Compliance access has been removed.',
     });
     return;
   }
@@ -558,7 +558,7 @@ async function handleInvoicePaymentFailed(invoice: Stripe.Invoice): Promise<void
   if (dbSubscription) {
     // Suspend access immediately: a failed renewal charge means the subscription is
     // no longer paid for. Mark it PAST_DUE so requireActiveBilling / requireSubscription
-    // block MC unlocks, CarrierPulse, and other gated features until the card succeeds.
+    // block MC unlocks, DataQ, and other gated features until the card succeeds.
     // (customer.subscription.updated normally also reports this, but we set it here so
     // suspension doesn't depend on event ordering.) Restored by handleInvoicePaid.
     if (dbSubscription.status === SubscriptionStatus.ACTIVE) {
@@ -1117,7 +1117,7 @@ async function handleCheckoutSessionCompleted(session: Stripe.Checkout.Session):
   // The pass is NOT a recurring Stripe subscription, so customer.subscription.*
   // events never fire for it — this checkout handler is the only fulfilment hook.
   // It records an ACTIVE VIP_ACCESS subscription row (which the entitlement +
-  // access gates key off) and grants CarrierPulse access.
+  // access gates key off) and grants DataQ access.
   if (type === 'vip_pass_purchase') {
     await fulfillVipPassPurchase(session);
   }

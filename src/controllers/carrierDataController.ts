@@ -20,7 +20,7 @@ export const getCarrierReport = asyncHandler(async (req: AuthRequest, res: Respo
     return res.status(404).json({ success: false, error: 'Carrier data not found' });
   }
 
-  // Fleet VINs are paid Carrier Pulse data; anonymous preview visitors don't get them.
+  // Fleet VINs are paid DataQ data; anonymous preview visitors don't get them.
   res.json({ success: true, data: req.user ? report : stripVins(report) });
 });
 
@@ -52,7 +52,7 @@ export const getChameleonIntel = asyncHandler(async (req: AuthRequest, res: Resp
 
   // Paid feature — the page paywalls, but the API has to as well.
   if (!req.user || !(await hasCarrierPulseAccess(req.user.id, req.user.role))) {
-    return res.status(403).json({ success: false, error: 'Chameleon Check requires CarrierPulse access.', code: 'CARRIER_PULSE_REQUIRED' });
+    return res.status(403).json({ success: false, error: 'Chameleon Check requires DataQ access.', code: 'CARRIER_PULSE_REQUIRED' });
   }
 
   const intel = await chameleonIntelService.getIntel(dotNumber);

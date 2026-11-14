@@ -209,7 +209,7 @@ class CreditService {
         priceYearly: 374.40,
         stripePriceIdMonthly: process.env.STRIPE_PRICE_PROFESSIONAL_MONTHLY || '',
         stripePriceIdYearly: process.env.STRIPE_PRICE_PROFESSIONAL_YEARLY || '',
-        features: ['10 listing unlock credits per month', 'EVA AI Assistant', 'CarrierPulse included'],
+        features: ['10 listing unlock credits per month', 'EVA AI Assistant', 'DataQ included'],
       };
     }
     const planKey = plan as 'STARTER' | 'PREMIUM' | 'ENTERPRISE' | 'VIP_ACCESS' | 'LEAD_GENERATOR_BUYER' | 'LEAD_GENERATOR_BROKER';

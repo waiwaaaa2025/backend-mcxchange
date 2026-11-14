@@ -48,7 +48,7 @@ export function buildChameleonTools(): ToolDef[] {
         if (!ctx.userId) return { error: 'no user in context' };
         if (!(await hasCarrierPulseAccess(ctx.userId, ctx.role))) {
           return {
-            error: 'Chameleon Check is included with any Domilea subscription or the CarrierPulse add-on. The user does not have access yet.',
+            error: 'Chameleon Check is included with any Domilea subscription or the DataQ add-on. The user does not have access yet.',
             upgradePath: '/buyer/chameleon-check',
           };
         }

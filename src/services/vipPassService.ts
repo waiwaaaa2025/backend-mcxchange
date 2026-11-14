@@ -20,7 +20,7 @@ import logger from '../utils/logger';
  * The pass is NOT a recurring Stripe subscription, so customer.subscription.*
  * events never fire for it and `stripe.subscriptions.list` never returns it.
  * This function records an ACTIVE VIP_ACCESS subscription row (which the
- * entitlement + access gates key off), grants CarrierPulse access, resets
+ * entitlement + access gates key off), grants DataQ access, resets
  * credits to the VIP allotment, and records the payment.
  *
  * It is called from TWO places and must stay idempotent:
@@ -92,7 +92,7 @@ export async function fulfillVipPassPurchase(session: Stripe.Checkout.Session): 
     } as any);
   }
 
-  // Grant CarrierPulse access and persist the Stripe customer id if it changed.
+  // Grant DataQ access and persist the Stripe customer id if it changed.
   await user.update({
     carrierPulseAccess: true,
     ...(stripeCustomerId && stripeCustomerId !== user.stripeCustomerId
@@ -125,7 +125,7 @@ export async function fulfillVipPassPurchase(session: Stripe.Checkout.Session): 
     userId,
     type: NotificationType.SYSTEM,
     title: 'VIP Access Activated',
-    message: 'Your VIP / Deal Access Pass is active. CarrierPulse and 20 company credit reports/mo are now included.',
+    message: 'Your VIP / Deal Access Pass is active. DataQ and 20 company credit reports/mo are now included.',
     link: '/buyer/subscription',
   });
 
