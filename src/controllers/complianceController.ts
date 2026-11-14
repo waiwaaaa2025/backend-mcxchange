@@ -6,7 +6,7 @@ import {
   CarrierSnapshot, CarrierChangeEvent,
 } from '../models';
 import morproLinqService from '../services/morproLinqService';
-import { refreshCarrierSnapshot } from '../services/carrierSnapshot.service';
+import { refreshCarrierSnapshot, applyInspectionDetail } from '../services/carrierSnapshot.service';
 import logger from '../utils/logger';
 
 interface AuthedRequest extends Request {
@@ -170,6 +170,12 @@ export async function getCompany(req: AuthedRequest, res: Response) {
   }
 
   const payload = (snapshot?.payloadJson as any) || null;
+  // Snapshots saved before violation detail existed get it filled once.
+  if (snapshot && payload && (await applyInspectionDetail(payload, company.dotNumber))) {
+    snapshot.set('payloadJson', { ...payload } as any);
+    snapshot.changed('payloadJson', true);
+    await snapshot.save().catch((err: Error) => logger.warn(`Snapshot detail save failed: ${err.message}`));
+  }
   res.json({
     success: true,
     data: {

@@ -368,7 +368,7 @@ async function sendToolAccess(req: AuthRequest, res: Response, includeFreePromo:
   });
 }
 
-// Create CarrierPulse checkout session ($12.99/mo standalone or add-on for Starter)
+// Create CarrierPulse checkout session ($19.99/mo standalone or add-on for Starter)
 export const createCarrierPulseCheckout = asyncHandler(async (req: AuthRequest, res: Response) => {
   if (!req.user) {
     res.status(401).json({ success: false, error: 'Not authenticated' });
@@ -406,7 +406,7 @@ export const createCarrierPulseCheckout = asyncHandler(async (req: AuthRequest, 
   }
 
   const frontendUrl = config.frontendUrl || 'http://localhost:5173';
-  const carrierPulsePriceId = process.env.STRIPE_PRICE_CARRIER_PULSE || 'price_1TC6kqFnDj2YhGIWZjMc7hWD';
+  const carrierPulsePriceId = process.env.STRIPE_PRICE_CARRIER_PULSE || 'price_1UblMsFnDj2YhGIWmV0Z3DpM';
 
   const consentId = await recordPaymentConsent(req, { signatureName, plan: 'carrier_pulse' });
 

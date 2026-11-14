@@ -1,6 +1,24 @@
 import { CarrierSnapshot, CarrierChangeEvent, CarrierChangeSeverity, ManagedCompany } from '../models';
 import morproLinqService from '../services/morproLinqService';
 import logger from '../utils/logger';
+import { applyFmcsaSafetyFallback } from './fmcsaSafetyFallback';
+import { applyViolationDetail, VIOLATION_DETAIL_MARKER } from './fmcsaViolationDetail';
+
+/**
+ * Fills inspections from FMCSA when LINQ has none, then attaches the cited
+ * violation codes so the compliance workspace can offer DataQs challenges.
+ * Mutates `report`; returns true when anything was added or marked.
+ */
+export async function applyInspectionDetail(report: any, dotNumber: string): Promise<boolean> {
+  if (!report || report[VIOLATION_DETAIL_MARKER] !== undefined) return false;
+  await applyFmcsaSafetyFallback(report, dotNumber).catch((err) =>
+    logger.warn(`Compliance FMCSA safety fallback failed for DOT ${dotNumber}: ${(err as Error).message}`)
+  );
+  await applyViolationDetail(report, dotNumber).catch((err) =>
+    logger.warn(`Compliance violation detail failed for DOT ${dotNumber}: ${(err as Error).message}`)
+  );
+  return report[VIOLATION_DETAIL_MARKER] !== undefined;
+}
 
 /**
  * Pulls a fresh LINQ /report for a managed company, extracts hot scalars,
@@ -25,6 +43,8 @@ export async function refreshCarrierSnapshot(managedCompanyId: string, dotNumber
     logger.warn(`refreshCarrierSnapshot: LINQ returned null for DOT ${dotNumber}`);
     return { snapshot: null, changesDetected: 0, source: 'failed' };
   }
+
+  await applyInspectionDetail(report, dotNumber);
 
   const prior = await CarrierSnapshot.findByPk(managedCompanyId);
   const extracted = extractHotScalars(report);

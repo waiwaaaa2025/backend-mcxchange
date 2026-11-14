@@ -61,6 +61,8 @@ const LEGACY_PRICE_PLANS: Record<string, { plan: string; interval: 'monthly' | '
   price_1Tc818FnDj2YhGIWVf8Pbtop: { plan: 'lead_generator_broker', interval: 'monthly' }, // original $499
   price_1UIwd1FnDj2YhGIWsMxOQk6X: { plan: 'lead_generator_broker', interval: 'monthly' }, // "full lead generator" $700
   price_1UL7GgFnDj2YhGIWmqzfs78v: { plan: 'lead_generator_broker', interval: 'monthly' }, // "Insurance lead generator" $1,000
+  // CarrierPulse standalone at the original $12.99 (repriced to $19.99 on 2026-11-14).
+  price_1TC6kqFnDj2YhGIWZjMc7hWD: { plan: 'carrier_pulse', interval: 'monthly' },
   // CheckMyCDL — a separate product billed through the same Stripe account.
   price_1TUvSAFnDj2YhGIWFaCRboL4: { plan: 'checkmycdl', interval: 'monthly' }, // Starter $59
   price_1TUvUXFnDj2YhGIWNCsyAbko: { plan: 'checkmycdl', interval: 'monthly' }, // Pro $89

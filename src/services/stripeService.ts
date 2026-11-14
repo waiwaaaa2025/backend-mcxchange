@@ -96,7 +96,7 @@ export const SUBSCRIPTION_PRICE_IDS = {
   },
   // Package Tool / Pulse Bundle — grandfathered ($14.99/mo, tools only).
   // No longer offered to new signups; existing subs being migrated to
-  // CarrierPulse standalone ($12.99/mo).
+  // CarrierPulse standalone ($19.99/mo, includes DataQs).
   package_tool: {
     monthly: process.env.STRIPE_PRICE_PACKAGE_TOOL_MONTHLY || 'price_1TFIVRFnDj2YhGIWVhMNe62E',
   },
@@ -115,7 +115,7 @@ export const SUBSCRIPTION_PRICE_IDS = {
     monthly: process.env.STRIPE_PRICE_VIP_ACCESS_MONTHLY || '',
     yearly: process.env.STRIPE_PRICE_VIP_ACCESS_YEARLY || '',
   },
-  // CarrierPulse is a $12.99/mo add-on (legacy — bundled into all plans
+  // CarrierPulse is a $19.99/mo add-on (was $12.99 until 2026-11-14) (legacy — bundled into all plans
   // as of 2026-05). Existing standalone subscribers still recur here.
   carrier_pulse: {
     monthly: process.env.STRIPE_PRICE_CARRIER_PULSE || '',
