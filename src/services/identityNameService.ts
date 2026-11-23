@@ -62,9 +62,11 @@ function tidy(name: string): string {
 
 export interface NameCheck {
   accountName: string | null;
+  signupName: string | null; // what they typed at signup (before the ID name replaced it)
   idName: string | null;
   cardholderName: string | null;
   idMatchesAccount: boolean | null; // null = nothing to compare
+  idMatchesSignup: boolean | null;
   cardMatchesId: boolean | null;
   cardMatchesAccount: boolean | null;
 }
@@ -74,30 +76,32 @@ export function buildNameCheck(user: any): NameCheck {
   const card = user?.cardholderName || null;
   const [accFirst, accLast] = splitFull(user?.name);
   const cards = card ? String(card).split(' / ') : [];
+  const signupName = user?.signupName || user?.name || null;
   return {
     accountName: user?.name || null,
+    signupName,
     idName,
     cardholderName: card,
     idMatchesAccount: idName ? namesMatch(user.identityFirstName, user.identityLastName, user.name) : null,
+    idMatchesSignup: idName ? namesMatch(user.identityFirstName, user.identityLastName, signupName) : null,
     cardMatchesId: idName && card ? allMatch(cards, (c) => namesMatch(user.identityFirstName, user.identityLastName, c)) : null,
     cardMatchesAccount: card ? allMatch(cards, (c) => namesMatch(accFirst, accLast, c)) : null,
   };
 }
 
 /**
- * Which names fail to line up. A buyer must have the same person on the
- * account, the government ID and the card they paid with. "Nothing to
- * compare" (null) is not a mismatch.
+ * What doesn't line up, in plain words, for admins and dispute evidence.
+ * Informational only: nothing is blocked on a mismatch. null = nothing to compare.
  */
 export function nameMismatches(check: NameCheck): string[] {
   const out: string[] = [];
-  if (check.idMatchesAccount === false) out.push('ID name does not match account name');
-  if (check.cardMatchesId === false) out.push('cardholder name does not match ID name');
-  else if (check.cardMatchesId === null && check.cardMatchesAccount === false) out.push('cardholder name does not match account name');
+  if (check.idMatchesSignup === false) out.push(`Signed up as "${check.signupName}" but the ID says "${check.idName}"`);
+  if (check.cardMatchesId === false) out.push(`Card is in the name "${check.cardholderName}", not the ID name "${check.idName}"`);
+  else if (check.cardMatchesId === null && check.cardMatchesAccount === false) out.push(`Card is in the name "${check.cardholderName}", not the account name "${check.accountName}"`);
   return out;
 }
 
-/** Email the admin notification list about a buyer whose names don't match. Never throws. */
+/** Email the admin notification list about a user whose names don't line up. Never throws. */
 export async function notifyAdminsOfNameMismatch(user: any, check: NameCheck, problems: string[]): Promise<void> {
   try {
     const setting: any = await PlatformSetting.findOne({ where: { key: 'admin_notification_emails' } });
@@ -106,12 +110,11 @@ export async function notifyAdminsOfNameMismatch(user: any, check: NameCheck, pr
     const esc = (v: any) => String(v ?? '—').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]!));
     const html = `
       <h2>Name mismatch after ID verification</h2>
-      <p><strong>${esc(user.email)}</strong> (${esc(user.role)}) verified their ID, but the names don't match.
-      They can't unlock listings until you approve them or fix the account name.</p>
+      <p><strong>${esc(user.email)}</strong> (${esc(user.role)}) verified their ID. Their account name was updated to the name on the ID. Nothing was blocked; this is for your records.</p>
       <ul>${problems.map((p) => `<li>${esc(p)}</li>`).join('')}</ul>
       <table cellpadding="4">
-        <tr><td><strong>Account name</strong></td><td>${esc(check.accountName)}</td></tr>
-        <tr><td><strong>Name on ID</strong></td><td>${esc(check.idName)}</td></tr>
+        <tr><td><strong>Name at signup</strong></td><td>${esc(check.signupName)}</td></tr>
+        <tr><td><strong>Name on ID (now the account name)</strong></td><td>${esc(check.idName)}</td></tr>
         <tr><td><strong>Cardholder name</strong></td><td>${esc(check.cardholderName)}</td></tr>
       </table>
       <p><a href="${config.frontendUrl}/admin/users">Review in admin → Users</a></p>`;
@@ -122,13 +125,23 @@ export async function notifyAdminsOfNameMismatch(user: any, check: NameCheck, pr
   }
 }
 
-/** Admin action: let a buyer through the name-match gate anyway. */
-export async function approveNameMatch(userId: string, approve = true): Promise<NameCheck & { nameMatchApprovedAt: Date | null }> {
-  const user: any = await User.findByPk(userId);
-  if (!user) throw new Error('User not found');
-  await user.update({ nameMatchApprovedAt: approve ? new Date() : null });
-  logger.info('Admin set name-match approval', { userId, approve });
-  return { ...buildNameCheck(user), nameMatchApprovedAt: user.nameMatchApprovedAt || null };
+/**
+ * After ID verification: remember the signup name (once), then make the
+ * account name the legal name from the ID. Safe to call repeatedly.
+ */
+export async function adoptIdName(user: any): Promise<NameCheck> {
+  const raw = idFullName(user);
+  if (raw) {
+    const updates: any = {};
+    if (!user.signupName && user.name) updates.signupName = user.name;
+    const idName = tidy(raw);
+    if (user.name !== idName) updates.name = idName;
+    if (Object.keys(updates).length) {
+      await user.update(updates);
+      logger.info('Account name set from ID', { userId: user.id, signupName: user.signupName, idName });
+    }
+  }
+  return buildNameCheck(user);
 }
 
 /**
@@ -172,7 +185,7 @@ export async function applyIdNameToAccount(userId: string): Promise<NameCheck> {
   if (!raw) throw new Error('No ID name on file for this user');
   const idName = tidy(raw);
   const previous = user.name;
-  await user.update({ name: idName });
+  await user.update({ name: idName, ...(user.signupName ? {} : { signupName: previous }) });
   logger.info('Admin applied ID name to account', { userId, previous, idName });
   return buildNameCheck(user);
 }

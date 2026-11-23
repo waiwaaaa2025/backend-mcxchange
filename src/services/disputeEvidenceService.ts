@@ -403,6 +403,10 @@ class DisputeEvidenceService {
         if (nameCheck?.idName) {
           KV('Legal name on government ID', nameCheck.idName);
           KV('Account name vs ID', yn(nameCheck.idMatchesAccount));
+          if (nameCheck.signupName && nameCheck.signupName !== nameCheck.accountName) {
+            KV('Name entered at signup', nameCheck.signupName);
+            KV('Signup name vs ID', yn(nameCheck.idMatchesSignup));
+          }
         }
         if (nameCheck?.cardholderName) {
           KV('Cardholder name on card', nameCheck.cardholderName);

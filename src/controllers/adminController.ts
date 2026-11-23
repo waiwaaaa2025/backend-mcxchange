@@ -1,5 +1,5 @@
 import { Response } from 'express';
-import { syncIdentityNames, applyIdNameToAccount, buildNameCheck, approveNameMatch } from '../services/identityNameService';
+import { syncIdentityNames, applyIdNameToAccount, buildNameCheck } from '../services/identityNameService';
 import { body } from 'express-validator';
 import { adminService } from '../services/adminService';
 import { asyncHandler, NotFoundError, BadRequestError } from '../middleware/errorHandler';
@@ -936,7 +936,7 @@ export const getUserNameCheck = asyncHandler(async (req: AuthRequest, res: Respo
     return;
   }
   const check = await syncIdentityNames(user);
-  res.json({ success: true, data: { ...check, nameMatchApprovedAt: user.nameMatchApprovedAt || null } });
+  res.json({ success: true, data: check });
 });
 
 // Replace the account name with the name read off the user's ID.
@@ -949,22 +949,12 @@ export const applyUserIdName = asyncHandler(async (req: AuthRequest, res: Respon
   }
 });
 
-// Let a buyer unlock listings despite a name mismatch (body.approve=false revokes).
-export const approveUserNameMatch = asyncHandler(async (req: AuthRequest, res: Response) => {
-  try {
-    const data = await approveNameMatch(req.params.id, req.body?.approve !== false);
-    res.json({ success: true, data, message: data.nameMatchApprovedAt ? 'Name match approved' : 'Name match approval removed' });
-  } catch (e) {
-    res.status(400).json({ success: false, error: (e as Error).message });
-  }
-});
-
 // Every ID-verified user with their three names and match flags (from DB;
 // kept fresh by the verification webhook + scripts/syncIdentityNames).
 export const getIdentityNameReport = asyncHandler(async (_req: AuthRequest, res: Response) => {
   const users: any[] = await User.findAll({
     where: { identityVerified: true },
-    attributes: ['id', 'email', 'name', 'role', 'identityVerifiedAt', 'identityFirstName', 'identityLastName', 'cardholderName'],
+    attributes: ['id', 'email', 'name', 'signupName', 'role', 'identityVerifiedAt', 'identityFirstName', 'identityLastName', 'cardholderName'],
     order: [['identityVerifiedAt', 'DESC']],
   });
   res.json({

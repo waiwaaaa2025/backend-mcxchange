@@ -1,5 +1,5 @@
 import { Response } from 'express';
-import { syncIdentityNames } from '../services/identityNameService';
+import { syncIdentityNames, adoptIdName } from '../services/identityNameService';
 import { AuthRequest } from '../types';
 import { User } from '../models';
 import { stripeService } from '../services/stripeService';
@@ -156,7 +156,10 @@ export const getVerificationStatus = async (req: AuthRequest, res: Response): Pr
 
           await user.update(updateData);
           if (stripeStatus === 'verified') {
-            syncIdentityNames(user).catch(() => {}); // don't hold up the status poll
+            // don't hold up the status poll
+            User.findByPk(user.id)
+              .then((u) => (u ? syncIdentityNames(u).then(() => adoptIdName(u)) : null))
+              .catch(() => {});
           }
         }
 

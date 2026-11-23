@@ -1,5 +1,5 @@
 import { equipmentOrderService } from '../services/equipmentOrderService';
-import { syncIdentityNames } from '../services/identityNameService';
+import { syncIdentityNames, adoptIdName, nameMismatches, notifyAdminsOfNameMismatch } from '../services/identityNameService';
 import { Request, Response } from 'express';
 import Stripe from 'stripe';
 import { stripeService } from '../services/stripeService';
@@ -1220,8 +1220,16 @@ async function handleIdentityVerified(session: any): Promise<void> {
     newTrustScore,
   });
 
-  // Save the legal name from the ID + cardholder name for admin name matching.
+  // Save the legal name from the ID + cardholder name, make the ID name the
+  // account name (signup name kept), and tell admins what didn't line up.
+  // Nothing is blocked on a mismatch.
   await syncIdentityNames(user, { sessionId: session.id });
+  const nameCheck = await adoptIdName(user);
+  const problems = nameMismatches(nameCheck);
+  if (problems.length) {
+    logger.warn('Identity verified with name differences', { userId, problems });
+    await notifyAdminsOfNameMismatch(user, nameCheck, problems);
+  }
 
   const isSeller = user.role === UserRole.SELLER;
 

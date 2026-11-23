@@ -2,28 +2,44 @@ jest.mock('../../../models', () => ({ User: {}, PlatformSetting: {} }));
 jest.mock('../../../services/stripeService', () => ({ stripeService: {} }));
 jest.mock('../../../services/emailService', () => ({ emailService: {} }));
 
-import { buildNameCheck, nameMismatches } from '../../../services/identityNameService';
+import { buildNameCheck, nameMismatches, adoptIdName } from '../../../services/identityNameService';
 
-const check = (name: string, first: string, last: string, card: string | null) =>
-  nameMismatches(buildNameCheck({ name, identityFirstName: first, identityLastName: last, cardholderName: card }));
+const check = (name: string, first: string, last: string, card: string | null, signupName?: string) =>
+  nameMismatches(buildNameCheck({ name, signupName, identityFirstName: first, identityLastName: last, cardholderName: card }));
 
-describe('name match gate (account = ID = card)', () => {
-  it('passes when all three are the same person (case, middle initial)', () => {
+describe('name check (signup / ID / card), informational only', () => {
+  it('nothing to report when all three are the same person', () => {
     expect(check('John Smith', 'JOHN', 'SMITH', 'John A Smith')).toEqual([]);
   });
-  it('passes with accents and compound surnames', () => {
+  it('handles accents and compound surnames', () => {
     expect(check('José García-López', 'JOSE', 'GARCIA LOPEZ', 'JOSE GARCIA')).toEqual([]);
   });
-  it('flags an account name that differs from the ID', () => {
-    expect(check('Johnny S', 'JOHN', 'SMITH', 'John Smith')).toEqual(['ID name does not match account name']);
+  it('reports a signup name that differs from the ID, even after the account name was replaced', () => {
+    expect(check('John Smith', 'JOHN', 'SMITH', 'John Smith', 'Johnny S')).toEqual(['Signed up as "Johnny S" but the ID says "JOHN SMITH"']);
   });
-  it("flags someone else's card", () => {
-    expect(check('John Smith', 'JOHN', 'SMITH', 'Maria Lopez')).toEqual(['cardholder name does not match ID name']);
+  it("reports someone else's card", () => {
+    expect(check('John Smith', 'JOHN', 'SMITH', 'Maria Lopez')).toEqual(['Card is in the name "Maria Lopez", not the ID name "JOHN SMITH"']);
   });
-  it('flags if any one of several cards is a stranger', () => {
-    expect(check('John Smith', 'JOHN', 'SMITH', 'John Smith / Maria Lopez')).toEqual(['cardholder name does not match ID name']);
-  });
-  it('does not block when no cardholder name is on file', () => {
+  it('nothing to report when no cardholder name is on file', () => {
     expect(check('John Smith', 'JOHN', 'SMITH', null)).toEqual([]);
+  });
+});
+
+describe('adoptIdName', () => {
+  it('keeps the signup name and sets the account name to the (tidied) ID name', async () => {
+    const user: any = { id: 'u1', name: 'Johnny S', identityFirstName: 'JOHN', identityLastName: "O'BRIEN SMITH" };
+    user.update = jest.fn(async (u: any) => Object.assign(user, u));
+    const nc = await adoptIdName(user);
+    expect(user.signupName).toBe('Johnny S');
+    expect(user.name).toBe("John O'Brien Smith");
+    expect(nc.idMatchesSignup).toBe(false);
+    // second run doesn't overwrite the signup name
+    await adoptIdName(user);
+    expect(user.signupName).toBe('Johnny S');
+  });
+  it('does nothing without an ID name', async () => {
+    const user: any = { id: 'u2', name: 'Jane Doe', update: jest.fn() };
+    await adoptIdName(user);
+    expect(user.update).not.toHaveBeenCalled();
   });
 });

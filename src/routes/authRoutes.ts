@@ -17,6 +17,7 @@ import {
   switchRoleValidation,
 } from '../controllers/authController';
 import { authenticate } from '../middleware/auth';
+import { getTermsSignatureStatus, signTerms } from '../controllers/termsSignatureController';
 import validate from '../middleware/validate';
 import { authLimiter, passwordResetLimiter } from '../middleware/rateLimiter';
 
@@ -37,5 +38,9 @@ router.post('/logout-all', authenticate, logoutAll);
 router.post('/change-password', authenticate, changePassword);
 router.post('/resend-verification', authenticate, resendVerificationEmail);
 router.post('/switch-role', authenticate, validate(switchRoleValidation), switchRole);
+
+// Typed-signature Terms of Service agreement (asked once of every member)
+router.get('/terms-signature', authenticate, getTermsSignatureStatus);
+router.post('/terms-signature', authenticate, signTerms);
 
 export default router;
