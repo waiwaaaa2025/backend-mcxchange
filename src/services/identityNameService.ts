@@ -129,9 +129,19 @@ export async function notifyAdminsOfNameMismatch(user: any, check: NameCheck, pr
  * After ID verification: remember the signup name (once), then make the
  * account name the legal name from the ID. Safe to call repeatedly.
  */
+/** ID text we trust enough to make the account name: Latin letters (accents ok), spaces, ' - . only. */
+export function isCleanIdName(name: string | null): boolean {
+  if (!name) return false;
+  const plain = name.normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+  return /^[A-Za-z][A-Za-z' .-]*$/.test(plain) && plain.trim().includes(' ');
+}
+
 export async function adoptIdName(user: any): Promise<NameCheck> {
   const raw = idFullName(user);
-  if (raw) {
+  if (raw && !isCleanIdName(raw)) {
+    logger.warn('ID name not adopted (unreadable / mixed script)', { userId: user.id, raw });
+  }
+  if (raw && isCleanIdName(raw)) {
     const updates: any = {};
     if (!user.signupName && user.name) updates.signupName = user.name;
     const idName = tidy(raw);

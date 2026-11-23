@@ -2,7 +2,7 @@ jest.mock('../../../models', () => ({ User: {}, PlatformSetting: {} }));
 jest.mock('../../../services/stripeService', () => ({ stripeService: {} }));
 jest.mock('../../../services/emailService', () => ({ emailService: {} }));
 
-import { buildNameCheck, nameMismatches, adoptIdName } from '../../../services/identityNameService';
+import { buildNameCheck, nameMismatches, adoptIdName, isCleanIdName } from '../../../services/identityNameService';
 
 const check = (name: string, first: string, last: string, card: string | null, signupName?: string) =>
   nameMismatches(buildNameCheck({ name, signupName, identityFirstName: first, identityLastName: last, cardholderName: card }));
@@ -41,5 +41,16 @@ describe('adoptIdName', () => {
     const user: any = { id: 'u2', name: 'Jane Doe', update: jest.fn() };
     await adoptIdName(user);
     expect(user.update).not.toHaveBeenCalled();
+  });
+});
+
+describe('isCleanIdName', () => {
+  it('accepts normal Latin names', () => {
+    expect(isCleanIdName("JOHN O'BRIEN-SMITH")).toBe(true);
+    expect(isCleanIdName('JOSÉ GARCÍA')).toBe(true);
+  });
+  it('rejects mixed-script OCR junk and single words', () => {
+    expect(isCleanIdName('KoпУoг Jamshedovich Bahronov')).toBe(false);
+    expect(isCleanIdName('MADONNA')).toBe(false);
   });
 });
