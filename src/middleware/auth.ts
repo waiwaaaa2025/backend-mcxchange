@@ -6,8 +6,6 @@ import { AuthRequest, JWTPayload } from '../types';
 import { User, UserRole, Subscription, SubscriptionPlan } from '../models';
 import { hasActiveBundlePromo } from '../utils/bundlePromo';
 import { getLeadGeneratorAccess, LeadGeneratorTier } from '../services/entitlementService';
-import { syncIdentityNames, nameMismatches } from '../services/identityNameService';
-import logger from '../utils/logger';
 
 // Pick the role the current session should run as. Honors the JWT's role claim
 // (which can differ from the primary role when a buyer toggled to compliance,
@@ -526,9 +524,7 @@ export const requireLeadGeneratorBroker = async (
 // deal: buyers unlocking listings and every purchase step after an offer is
 // accepted; sellers accepting or countering offers and accepting/approving the
 // transaction (listingRoutes, offerRoutes, transactionRoutes). Browsing, messages,
-// subscriptions and tools never require it. Buyers must also pass the name match:
-// account name = name on ID = cardholder name (admins can approve exceptions via
-// users.nameMatchApprovedAt).
+// subscriptions and tools never require it.
 export const requireIdentityVerification = async (
   req: AuthRequest,
   res: Response,
@@ -556,27 +552,6 @@ export const requireIdentityVerification = async (
         code: 'IDENTITY_VERIFICATION_REQUIRED',
       });
       return;
-    }
-
-    // Buyers: the name on the account, the government ID and the card they
-    // paid with must be the same person (unless an admin approved them).
-    if (req.user.role === UserRole.BUYER) {
-      const user: any = await User.findByPk(req.user.id);
-      if (user && !user.nameMatchApprovedAt) {
-        // Re-pull from Stripe so a newly used card is checked too.
-        const check = await syncIdentityNames(user);
-        const problems = nameMismatches(check);
-        if (problems.length) {
-          logger.warn('Name-match gate blocked buyer', { userId: user.id, problems, path: req.originalUrl });
-          res.status(403).json({
-            success: false,
-            error: 'The name on your account, your ID and your payment card must match. Our team has been notified and will review your account.',
-            code: 'IDENTITY_NAME_MISMATCH',
-            data: { problems },
-          });
-          return;
-        }
-      }
     }
 
     next();

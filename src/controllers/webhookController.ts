@@ -1,5 +1,5 @@
 import { equipmentOrderService } from '../services/equipmentOrderService';
-import { syncIdentityNames, nameMismatches, notifyAdminsOfNameMismatch } from '../services/identityNameService';
+import { syncIdentityNames } from '../services/identityNameService';
 import { Request, Response } from 'express';
 import Stripe from 'stripe';
 import { stripeService } from '../services/stripeService';
@@ -1220,35 +1220,10 @@ async function handleIdentityVerified(session: any): Promise<void> {
     newTrustScore,
   });
 
-  // Save the legal name from the ID + cardholder name, then check that the
-  // account, the ID and the card are the same person (buyers).
-  const nameCheck = await syncIdentityNames(user, { sessionId: session.id });
+  // Save the legal name from the ID + cardholder name for admin name matching.
+  await syncIdentityNames(user, { sessionId: session.id });
 
   const isSeller = user.role === UserRole.SELLER;
-
-  const problems = user.role === UserRole.BUYER && !(user as any).nameMatchApprovedAt ? nameMismatches(nameCheck) : [];
-  if (problems.length) {
-    logger.warn('Identity verified but names do not match', { userId, problems, nameCheck });
-    await notifyAdminsOfNameMismatch(user, nameCheck, problems);
-    await notificationService.create({
-      userId,
-      type: NotificationType.VERIFICATION,
-      title: 'Identity Verified, Name Review Needed',
-      message: 'Your ID is verified, but the name on your account, your ID and your payment card must match. Our team is reviewing your account.',
-      link: '/settings',
-    });
-    await emailService.sendEmail({
-      to: user.email,
-      subject: 'Identity Verified, Name Review Needed - Domilea',
-      html: `
-        <h2>Your ID is verified, but the names don't match</h2>
-        <p>Hi ${user.name},</p>
-        <p>To unlock MC listings, the name on your Domilea account, your government ID and the card you paid with must all be the same person.</p>
-        <p>Our team has been notified and will review your account. If you entered a nickname or a different name on your account, reply to this email and we'll update it.</p>
-      `,
-    });
-    return;
-  }
 
   // Send notification
   await notificationService.create({
