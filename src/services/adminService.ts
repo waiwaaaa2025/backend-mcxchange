@@ -361,6 +361,7 @@ class AdminService {
         'identityFirstName',
         'identityLastName',
         'cardholderName',
+        'signupName',
       ],
       include: [subscriptionInclude],
     });
