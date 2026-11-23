@@ -289,6 +289,10 @@ class DisputeEvidenceService {
       `Terms accepted at signup: ${(terms as any[])[0] ? `${fmt((terms as any[])[0].acceptedAt)} from IP ${(terms as any[])[0].ipAddress || 'n/a'}` : 'mandatory checkbox (signature capture postdates this account)'}.`,
       `Payment terms signed at checkout: ${(paymentConsents as any[])[0] ? `${fmt((paymentConsents as any[])[0].acceptedAt)} from IP ${(paymentConsents as any[])[0].ipAddress || 'n/a'}` : 'signature capture postdates this charge; signup acceptance applies'}.`,
       identityStatement(user, nameCheck) || `Stripe Identity verified: ${user.identityVerified ? 'yes' : 'no'}.`,
+      ...(terms as any[]).filter((t) => t.termsVersion === 'card-auth-1.0').map((t) =>
+        `Card authorization signed ${fmt(t.acceptedAt)} from IP ${t.ipAddress || 'n/a'} as "${t.signatureName}": the customer attested the card in the name "${nameCheck?.cardholderName || '—'}" is theirs or that they are authorized by the cardholder, that all charges are authorized, and that they will not dispute them.`),
+      ...(terms as any[]).filter((t) => t.termsVersion === 'tos-signature-1.0').map((t) =>
+        `Terms of Service typed signature "${t.signatureName}" on ${fmt(t.acceptedAt)} from IP ${t.ipAddress || 'n/a'}.`),
     ];
     const uncategorizedText = clip(
       [
@@ -515,6 +519,21 @@ class DisputeEvidenceService {
           if (terms.length > 1) {
             doc.moveDown(0.2);
             doc.fillColor('#666').fontSize(8).text(`(${terms.length} acceptance records on file; most recent shown above.)`);
+          }
+          // Every signed statement on file, with what it said.
+          const LABELS: Record<string, string> = {
+            'tos-signature-1.0': 'Typed-signature agreement to the Terms of Service and Privacy Policy (incl. Payment Terms, Subscription Billing, Dispute Prohibition; all payments final).',
+            'id-name-ack-1.0': `Confirmed that the account name was updated to the legal name on the government ID (${nameCheck?.idName || user.name}) and that it is their correct legal name.`,
+            'card-auth-1.0': `Signed that the payment card in the name "${nameCheck?.cardholderName || '—'}" is theirs or that they are authorized by the cardholder to use it, that all charges to it for this account are authorized, and that they will not dispute them.`,
+            '1.0': 'Confidentiality, Non-Disclosure and Non-Circumvention Agreement (typed signature).',
+          };
+          doc.moveDown(0.5);
+          doc.font('Helvetica-Bold').fontSize(10).fillColor('#111').text('Signed statements on file');
+          for (const r of terms as any[]) {
+            const label = LABELS[r.termsVersion] || (String(r.termsVersion).startsWith('register-checkbox') ? 'Agreed to the Terms of Service at signup (required checkbox).' : `Terms acceptance (${r.termsVersion}).`);
+            doc.moveDown(0.2);
+            doc.font('Helvetica').fontSize(9).fillColor('#333')
+              .text(`• ${fmt(r.acceptedAt)}: signed as "${r.signatureName}" from IP ${r.ipAddress || 'n/a'}. ${label}`, { indent: 10 });
           }
         } else {
           doc.moveDown(0.2);

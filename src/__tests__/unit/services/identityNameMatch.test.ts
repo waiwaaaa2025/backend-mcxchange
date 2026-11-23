@@ -1,8 +1,9 @@
-jest.mock('../../../models', () => ({ User: {}, PlatformSetting: {} }));
+const mockCount = jest.fn(async () => 0);
+jest.mock('../../../models', () => ({ User: { count: (...a: any[]) => (mockCount as any)(...a) }, PlatformSetting: {} }));
 jest.mock('../../../services/stripeService', () => ({ stripeService: {} }));
 jest.mock('../../../services/emailService', () => ({ emailService: {} }));
 
-import { buildNameCheck, nameMismatches, adoptIdName, isCleanIdName } from '../../../services/identityNameService';
+import { buildNameCheck, nameMismatches, adoptIdName, isCleanIdName, looksTruncated } from '../../../services/identityNameService';
 
 const check = (name: string, first: string, last: string, card: string | null, signupName?: string) =>
   nameMismatches(buildNameCheck({ name, signupName, identityFirstName: first, identityLastName: last, cardholderName: card }));
@@ -52,5 +53,30 @@ describe('isCleanIdName', () => {
   it('rejects mixed-script OCR junk and single words', () => {
     expect(isCleanIdName('KoпУoг Jamshedovich Bahronov')).toBe(false);
     expect(isCleanIdName('MADONNA')).toBe(false);
+  });
+});
+
+describe('adoptIdName skips', () => {
+  const mk = (name: string, first: string, last: string): any => {
+    const u: any = { id: 'x', name, identityFirstName: first, identityLastName: last };
+    u.update = jest.fn(async (p: any) => Object.assign(u, p));
+    return u;
+  };
+  it('keeps the signup name when the ID read looks cut short', async () => {
+    expect(looksTruncated('EMMA GASPARY', 'Emma Gasparyan')).toBe(true);
+    expect(looksTruncated('ARTUR SARGSYAN', 'Artur')).toBe(false);
+    expect(looksTruncated('JOHN SMITH', 'Johnny Smith')).toBe(false);
+    expect(looksTruncated('SUKHJINDE KAUR', 'Sukhjinder kaur')).toBe(true);
+    const u = mk('Emma Gasparyan', 'EMMA', 'GASPARY');
+    const r = await adoptIdName(u);
+    expect(r.skipped).toBe('ID name looks cut short');
+    expect(u.update).not.toHaveBeenCalled();
+  });
+  it('does not rename when the same ID is on another account', async () => {
+    mockCount.mockResolvedValueOnce(1);
+    const u = mk('Ingrid Test', 'JANE', 'DOE');
+    const r = await adoptIdName(u);
+    expect(r.skipped).toMatch(/same ID used on 1 other/);
+    expect(u.name).toBe('Ingrid Test');
   });
 });

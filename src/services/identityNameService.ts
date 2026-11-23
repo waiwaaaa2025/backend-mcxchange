@@ -1,3 +1,4 @@
+import { Op } from 'sequelize';
 import { User, PlatformSetting } from '../models';
 import { stripeService } from './stripeService';
 import { emailService } from './emailService';
@@ -125,10 +126,6 @@ export async function notifyAdminsOfNameMismatch(user: any, check: NameCheck, pr
   }
 }
 
-/**
- * After ID verification: remember the signup name (once), then make the
- * account name the legal name from the ID. Safe to call repeatedly.
- */
 /** ID text we trust enough to make the account name: Latin letters (accents ok), spaces, ' - . only. */
 export function isCleanIdName(name: string | null): boolean {
   if (!name) return false;
@@ -136,20 +133,52 @@ export function isCleanIdName(name: string | null): boolean {
   return /^[A-Za-z][A-Za-z' .-]*$/.test(plain) && plain.trim().includes(' ');
 }
 
-export async function adoptIdName(user: any): Promise<NameCheck> {
+/**
+ * The ID read looks cut short: an ID word is a strict prefix of a longer word
+ * the user typed (ID "GASPARY" vs signup "Gasparyan"). Keep the signup name then.
+ */
+export function looksTruncated(idName: string | null, otherName: string | null): boolean {
+  const id = tokens(idName);
+  const other = tokens(otherName);
+  return id.some((t) => t.length >= 6 && other.some((o) => o.length > t.length && o.startsWith(t)));
+}
+
+/** Why the ID name should NOT replace the account name (null = safe to adopt). */
+export async function adoptSkipReason(user: any): Promise<string | null> {
   const raw = idFullName(user);
-  if (raw && !isCleanIdName(raw)) {
-    logger.warn('ID name not adopted (unreadable / mixed script)', { userId: user.id, raw });
+  if (!raw) return 'no ID name on file';
+  if (!isCleanIdName(raw)) return 'ID name unreadable';
+  const typed = user.signupName || user.name;
+  if (looksTruncated(raw, typed)) return 'ID name looks cut short';
+  const shared = await User.count({
+    where: {
+      identityFirstName: user.identityFirstName || null,
+      identityLastName: user.identityLastName || null,
+      id: { [Op.ne]: user.id },
+    } as any,
+  });
+  if (shared > 0) return `same ID used on ${shared} other account(s)`;
+  return null;
+}
+
+/**
+ * After ID verification: remember the signup name (once), then make the
+ * account name the legal name from the ID. Skips (and logs) unreadable,
+ * cut-short or shared IDs. Safe to call repeatedly.
+ */
+export async function adoptIdName(user: any): Promise<NameCheck & { skipped?: string }> {
+  const skip = await adoptSkipReason(user);
+  if (skip) {
+    if (idFullName(user)) logger.warn('ID name not adopted', { userId: user.id, reason: skip });
+    return { ...buildNameCheck(user), skipped: skip };
   }
-  if (raw && isCleanIdName(raw)) {
-    const updates: any = {};
-    if (!user.signupName && user.name) updates.signupName = user.name;
-    const idName = tidy(raw);
-    if (user.name !== idName) updates.name = idName;
-    if (Object.keys(updates).length) {
-      await user.update(updates);
-      logger.info('Account name set from ID', { userId: user.id, signupName: user.signupName, idName });
-    }
+  const updates: any = {};
+  if (!user.signupName && user.name) updates.signupName = user.name;
+  const idName = tidy(idFullName(user) as string);
+  if (user.name !== idName) updates.name = idName;
+  if (Object.keys(updates).length) {
+    await user.update(updates);
+    logger.info('Account name set from ID', { userId: user.id, signupName: user.signupName, idName });
   }
   return buildNameCheck(user);
 }
