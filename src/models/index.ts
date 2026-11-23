@@ -284,6 +284,7 @@ interface UserAttributes {
   identityFirstName?: string;
   identityLastName?: string;
   cardholderName?: string;
+  nameMatchApprovedAt?: Date;
   carrierPulseAccess: boolean;
   carrierPulseStripeSubId?: string;
   promoAccessType?: string;
@@ -293,7 +294,7 @@ interface UserAttributes {
   updatedAt?: Date;
 }
 
-interface UserCreationAttributes extends Optional<UserAttributes, 'id' | 'phone' | 'avatar' | 'status' | 'verified' | 'verifiedAt' | 'trustScore' | 'memberSince' | 'lastLoginAt' | 'companyName' | 'companyAddress' | 'city' | 'state' | 'zipCode' | 'ein' | 'mcNumber' | 'dotNumber' | 'sellerVerified' | 'sellerVerifiedAt' | 'totalCredits' | 'usedCredits' | 'stripeCustomerId' | 'stripeAccountId' | 'emailVerified' | 'identityVerified' | 'identityVerifiedAt' | 'stripeVerificationSessionId' | 'identityVerificationStatus' | 'identityFirstName' | 'identityLastName' | 'cardholderName' | 'carrierPulseAccess' | 'carrierPulseStripeSubId' | 'promoAccessType' | 'promoAccessExpiresAt' | 'trialEndsAt' | 'createdAt' | 'updatedAt'> {}
+interface UserCreationAttributes extends Optional<UserAttributes, 'id' | 'phone' | 'avatar' | 'status' | 'verified' | 'verifiedAt' | 'trustScore' | 'memberSince' | 'lastLoginAt' | 'companyName' | 'companyAddress' | 'city' | 'state' | 'zipCode' | 'ein' | 'mcNumber' | 'dotNumber' | 'sellerVerified' | 'sellerVerifiedAt' | 'totalCredits' | 'usedCredits' | 'stripeCustomerId' | 'stripeAccountId' | 'emailVerified' | 'identityVerified' | 'identityVerifiedAt' | 'stripeVerificationSessionId' | 'identityVerificationStatus' | 'identityFirstName' | 'identityLastName' | 'cardholderName' | 'nameMatchApprovedAt' | 'carrierPulseAccess' | 'carrierPulseStripeSubId' | 'promoAccessType' | 'promoAccessExpiresAt' | 'trialEndsAt' | 'createdAt' | 'updatedAt'> {}
 
 // ==================== USER MODEL ====================
 
@@ -333,6 +334,7 @@ export class User extends Model<UserAttributes, UserCreationAttributes> implemen
   declare identityFirstName: string | undefined;
   declare identityLastName: string | undefined;
   declare cardholderName: string | undefined;
+  declare nameMatchApprovedAt: Date | undefined;
   declare carrierPulseAccess: boolean;
   declare carrierPulseStripeSubId: string | undefined;
   declare promoAccessType: string | undefined;
@@ -490,6 +492,11 @@ User.init(
     },
     cardholderName: {
       type: DataTypes.STRING(255),
+      allowNull: true,
+    },
+    // Admin approved this buyer despite an account / ID / card name mismatch.
+    nameMatchApprovedAt: {
+      type: DataTypes.DATE,
       allowNull: true,
     },
     carrierPulseAccess: {

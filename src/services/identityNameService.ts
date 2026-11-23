@@ -1,5 +1,7 @@
-import { User } from '../models';
+import { User, PlatformSetting } from '../models';
 import { stripeService } from './stripeService';
+import { emailService } from './emailService';
+import { config } from '../config';
 import logger from '../utils/logger';
 
 /**
@@ -80,6 +82,53 @@ export function buildNameCheck(user: any): NameCheck {
     cardMatchesId: idName && card ? allMatch(cards, (c) => namesMatch(user.identityFirstName, user.identityLastName, c)) : null,
     cardMatchesAccount: card ? allMatch(cards, (c) => namesMatch(accFirst, accLast, c)) : null,
   };
+}
+
+/**
+ * Which names fail to line up. A buyer must have the same person on the
+ * account, the government ID and the card they paid with. "Nothing to
+ * compare" (null) is not a mismatch.
+ */
+export function nameMismatches(check: NameCheck): string[] {
+  const out: string[] = [];
+  if (check.idMatchesAccount === false) out.push('ID name does not match account name');
+  if (check.cardMatchesId === false) out.push('cardholder name does not match ID name');
+  else if (check.cardMatchesId === null && check.cardMatchesAccount === false) out.push('cardholder name does not match account name');
+  return out;
+}
+
+/** Email the admin notification list about a buyer whose names don't match. Never throws. */
+export async function notifyAdminsOfNameMismatch(user: any, check: NameCheck, problems: string[]): Promise<void> {
+  try {
+    const setting: any = await PlatformSetting.findOne({ where: { key: 'admin_notification_emails' } });
+    const emails = String(setting?.value || 'support@domilea.com')
+      .split(',').map((e) => e.trim()).filter((e) => e.includes('@'));
+    const esc = (v: any) => String(v ?? '—').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]!));
+    const html = `
+      <h2>Name mismatch after ID verification</h2>
+      <p><strong>${esc(user.email)}</strong> (${esc(user.role)}) verified their ID, but the names don't match.
+      They can't unlock listings until you approve them or fix the account name.</p>
+      <ul>${problems.map((p) => `<li>${esc(p)}</li>`).join('')}</ul>
+      <table cellpadding="4">
+        <tr><td><strong>Account name</strong></td><td>${esc(check.accountName)}</td></tr>
+        <tr><td><strong>Name on ID</strong></td><td>${esc(check.idName)}</td></tr>
+        <tr><td><strong>Cardholder name</strong></td><td>${esc(check.cardholderName)}</td></tr>
+      </table>
+      <p><a href="${config.frontendUrl}/admin/users">Review in admin → Users</a></p>`;
+    await Promise.all(emails.map((to) =>
+      emailService.sendEmail({ to, subject: `[Domilea] Name mismatch: ${user.email}`, html })));
+  } catch (e) {
+    logger.warn('Name mismatch admin email failed', { userId: user?.id, error: (e as Error).message });
+  }
+}
+
+/** Admin action: let a buyer through the name-match gate anyway. */
+export async function approveNameMatch(userId: string, approve = true): Promise<NameCheck & { nameMatchApprovedAt: Date | null }> {
+  const user: any = await User.findByPk(userId);
+  if (!user) throw new Error('User not found');
+  await user.update({ nameMatchApprovedAt: approve ? new Date() : null });
+  logger.info('Admin set name-match approval', { userId, approve });
+  return { ...buildNameCheck(user), nameMatchApprovedAt: user.nameMatchApprovedAt || null };
 }
 
 /**

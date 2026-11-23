@@ -1,5 +1,5 @@
 import { Response } from 'express';
-import { syncIdentityNames, applyIdNameToAccount, buildNameCheck } from '../services/identityNameService';
+import { syncIdentityNames, applyIdNameToAccount, buildNameCheck, approveNameMatch } from '../services/identityNameService';
 import { body } from 'express-validator';
 import { adminService } from '../services/adminService';
 import { asyncHandler, NotFoundError, BadRequestError } from '../middleware/errorHandler';
@@ -936,7 +936,7 @@ export const getUserNameCheck = asyncHandler(async (req: AuthRequest, res: Respo
     return;
   }
   const check = await syncIdentityNames(user);
-  res.json({ success: true, data: check });
+  res.json({ success: true, data: { ...check, nameMatchApprovedAt: user.nameMatchApprovedAt || null } });
 });
 
 // Replace the account name with the name read off the user's ID.
@@ -944,6 +944,16 @@ export const applyUserIdName = asyncHandler(async (req: AuthRequest, res: Respon
   try {
     const check = await applyIdNameToAccount(req.params.id);
     res.json({ success: true, data: check, message: 'Account name updated to match ID' });
+  } catch (e) {
+    res.status(400).json({ success: false, error: (e as Error).message });
+  }
+});
+
+// Let a buyer unlock listings despite a name mismatch (body.approve=false revokes).
+export const approveUserNameMatch = asyncHandler(async (req: AuthRequest, res: Response) => {
+  try {
+    const data = await approveNameMatch(req.params.id, req.body?.approve !== false);
+    res.json({ success: true, data, message: data.nameMatchApprovedAt ? 'Name match approved' : 'Name match approval removed' });
   } catch (e) {
     res.status(400).json({ success: false, error: (e as Error).message });
   }

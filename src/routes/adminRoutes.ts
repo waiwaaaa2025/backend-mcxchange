@@ -54,6 +54,7 @@ import {
   getUserListingsForDeposit,
   getUserDisputeEvidence,
   getUserNameCheck,
+  approveUserNameMatch,
   applyUserIdName,
   getIdentityNameReport,
   getUserDisputeEvidenceFields,
@@ -141,6 +142,7 @@ router.get('/users/:id/listings-for-deposit', getUserListingsForDeposit);
 router.get('/users/:id/dispute-evidence', getUserDisputeEvidence);
 router.get('/users/:id/name-check', getUserNameCheck);
 router.post('/users/:id/apply-id-name', applyUserIdName);
+router.post('/users/:id/approve-name-match', approveUserNameMatch);
 router.get('/users/:id/dispute-evidence-fields', getUserDisputeEvidenceFields);
 router.get('/terms-of-service.pdf', getTermsOfServicePdf);
 router.get('/user-emails.csv', exportUserEmails);
