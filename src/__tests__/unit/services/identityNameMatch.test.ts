@@ -79,4 +79,11 @@ describe('adoptIdName skips', () => {
     expect(r.skipped).toMatch(/same ID used on 1 other/);
     expect(u.name).toBe('Ingrid Test');
   });
+  it('renames the same person across their own accounts, dropping doubled words', async () => {
+    mockCount.mockResolvedValueOnce(1);
+    const u = mk('Christian Belesi', 'CHRISTIAN CHRISTIAN', 'BELESI');
+    const r = await adoptIdName(u);
+    expect(r.skipped).toBeUndefined();
+    expect(u.name).toBe('Christian Belesi');
+  });
 });

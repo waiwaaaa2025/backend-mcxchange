@@ -43,6 +43,11 @@ function splitFull(name?: string | null): [string, string] {
   return [t[0] || '', t.slice(1).join(' ')];
 }
 
+/** Same words, ignoring case / spacing / accents / punctuation. */
+export function sameNameText(a?: string | null, b?: string | null): boolean {
+  return tokens(a).join(' ') === tokens(b).join(' ');
+}
+
 export function idFullName(user: any): string | null {
   const n = [user?.identityFirstName, user?.identityLastName].filter(Boolean).join(' ').trim();
   return n || null;
@@ -157,7 +162,11 @@ export async function adoptSkipReason(user: any): Promise<string | null> {
       id: { [Op.ne]: user.id },
     } as any,
   });
-  if (shared > 0) return `same ID used on ${shared} other account(s)`;
+  // Same person with several accounts is fine; an ID that doesn't match the
+  // name typed on this account (someone else's ID) is not adopted.
+  if (shared > 0 && namesMatch(user.identityFirstName, user.identityLastName, typed) !== true) {
+    return `same ID used on ${shared} other account(s) and it doesn't match this account's name`;
+  }
   return null;
 }
 
@@ -174,7 +183,9 @@ export async function adoptIdName(user: any): Promise<NameCheck & { skipped?: st
   }
   const updates: any = {};
   if (!user.signupName && user.name) updates.signupName = user.name;
-  const idName = tidy(idFullName(user) as string);
+  // tidy casing, and drop a word the ID read doubled ("CHRISTIAN CHRISTIAN BELESI")
+  const idName = tidy(idFullName(user) as string)
+    .split(/\s+/).filter((w, i, a) => i === 0 || w.toLowerCase() !== a[i - 1].toLowerCase()).join(' ');
   if (user.name !== idName) updates.name = idName;
   if (Object.keys(updates).length) {
     await user.update(updates);

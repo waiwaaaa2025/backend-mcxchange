@@ -2,7 +2,7 @@ import { Response } from 'express';
 import { AuthRequest } from '../types';
 import { User, UserRole, UserTermsAcceptance } from '../models';
 import { emailService } from '../services/emailService';
-import { buildNameCheck, namesMatch } from '../services/identityNameService';
+import { buildNameCheck, namesMatch, sameNameText } from '../services/identityNameService';
 import logger from '../utils/logger';
 import { asyncHandler } from '../middleware/errorHandler';
 
@@ -38,7 +38,8 @@ async function pendingFor(userId: string): Promise<{ user: any; pending: Pending
   });
   const signed = new Set(rows.map((r) => r.termsVersion));
   const check = buildNameCheck(user);
-  const nameChanged = !!(user?.signupName && user.signupName !== user.name);
+  // Only a real change (not just capitals/spacing) needs their acknowledgement.
+  const nameChanged = !!(user?.signupName && !sameNameText(user.signupName, user.name));
   return {
     user,
     signedVersions: signed,

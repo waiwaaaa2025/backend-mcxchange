@@ -21,7 +21,8 @@ async function main() {
     if (skip) { skipped++; console.log(`SKIP ${u.email}: ${skip} (account "${u.name}", ID "${idFullName(u)}")`); }
     const check = dry || skip ? buildNameCheck(u) : await adoptIdName(u);
     if (dry && !skip) {
-      const target = String(idFullName(u)).toLowerCase().replace(/(^|[\s'-])([a-z])/g, (_m: string, p: string, c: string) => p + c.toUpperCase());
+      const target = String(idFullName(u)).toLowerCase().replace(/(^|[\s'-])([a-z])/g, (_m: string, p: string, c: string) => p + c.toUpperCase())
+        .split(/\s+/).filter((w, i, a) => i === 0 || w.toLowerCase() !== a[i - 1].toLowerCase()).join(' ');
       if (target !== before) { renamed++; console.log(`WOULD RENAME ${u.email}: "${before}" -> "${target}"`); }
     }
     if (!dry && u.name !== before) { renamed++; console.log(`RENAMED ${u.email}: "${before}" -> "${u.name}"`); }
